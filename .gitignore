@@ -1,0 +1,21 @@
+# Python caches and compiles
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Session / Credentials / Config files
+linkedin_cookies.json
+glassdoor_session.json
+
+# Local databases or logs
+*.log
+scraped_jobs.json
+
+# IDE config
+.vscode/
+.idea/
+.DS_Store
