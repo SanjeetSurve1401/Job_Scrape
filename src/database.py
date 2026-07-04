@@ -75,3 +75,54 @@ class DatabaseHandler(DatabaseInterface):
             self.client.close()
         except Exception as e:
             print(f"Warning: error closing MongoDB connection: {e}")
+
+
+class LocalDatabaseHandler(DatabaseInterface):
+    """In-memory database fallback when MongoDB is not available."""
+    def __init__(self):
+        self.jobs = {}
+
+    def save_job(self, job: Job) -> Tuple[bool, dict]:
+        """Deduplicates and saves job in memory."""
+        title = (job.title or "").strip()
+        company = (job.company or "").strip()
+        location = (job.location or "").strip()
+        about_job = (job.about_job or "").strip()
+
+        dedup_key = job.dedup_key()
+        existing_job = self.jobs.get(dedup_key)
+
+        if existing_job:
+            # Merge site sources
+            existing_sites = {s.strip() for s in existing_job.get("site", "").split(",") if s.strip()}
+            new_sites = job.site if isinstance(job.site, list) else [job.site]
+            for s in new_sites:
+                cleaned_site = s.strip()
+                if cleaned_site:
+                    existing_sites.add(cleaned_site)
+            
+            merged_sites_str = ", ".join(sorted(existing_sites))
+            existing_job["site"] = merged_sites_str
+
+            # Fill in missing fields from the new source
+            if not existing_job.get("about_job") and about_job:
+                existing_job["about_job"] = about_job
+            if not existing_job.get("salary") and job.salary:
+                existing_job["salary"] = job.salary
+            if not existing_job.get("url") and job.url:
+                existing_job["url"] = job.url
+
+            return False, existing_job
+        else:
+            job_dict = job.to_dict()
+            job_dict["title"] = title
+            job_dict["company"] = company
+            job_dict["location"] = location
+            job_dict["about_job"] = about_job
+            job_dict["_id"] = dedup_key
+            self.jobs[dedup_key] = job_dict
+            return True, job_dict
+
+    def close(self) -> None:
+        pass
+

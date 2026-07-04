@@ -2,7 +2,8 @@ import argparse
 import json
 from typing import List, Tuple
 from src.config import Config
-from src.database import DatabaseHandler
+from src.database import DatabaseHandler, LocalDatabaseHandler
+from src.interfaces import DatabaseInterface
 from src.verifier import JobVerifier
 from src.scrapers import get_scrapers
 from src.models import Job
@@ -33,8 +34,8 @@ def execute_scraping(scrapers: list, args) -> List[Job]:
             print(f"[Error] Scraper {scraper_name} failed: {e}")
     return all_scraped_jobs
 
-def process_and_save_jobs(db: DatabaseHandler, verifier: JobVerifier, raw_jobs: List[Job], args) -> Tuple[int, int, int, List[dict]]:
-    """Filters, verifies, and saves scraped jobs to MongoDB."""
+def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs: List[Job], args) -> Tuple[int, int, int, List[dict]]:
+    """Filters, verifies, and saves scraped jobs to database."""
     verified_jobs_count = 0
     new_jobs_inserted = 0
     existing_jobs_updated = 0
@@ -97,17 +98,23 @@ def main():
     print("=" * 60)
 
     # Initialize Database using Constructor-based Dependency Injection
-    try:
-        db = DatabaseHandler(
-            uri=Config.MONGO_URI,
-            db_name=Config.DB_NAME,
-            collection_name=Config.COLLECTION_NAME
-        )
-        print("Connected to MongoDB successfully.")
-    except Exception as e:
-        print(f"Error: MongoDB connection failed ({e})")
-        print("Please ensure your MONGO_URI in .env is correct and MongoDB is reachable.")
-        return
+    db = None
+    if Config.MONGO_URI and Config.MONGO_URI.strip():
+        try:
+            print("Connecting to MongoDB...")
+            db = DatabaseHandler(
+                uri=Config.MONGO_URI,
+                db_name=Config.DB_NAME,
+                collection_name=Config.COLLECTION_NAME
+            )
+            print("Connected to MongoDB successfully.")
+        except Exception as e:
+            print(f"[Warning] MongoDB connection failed ({e})")
+            print("Please check your MONGO_URI in .env if you want to write to MongoDB.")
+    
+    if db is None:
+        print("Falling back to local in-memory storage (results will be verified, deduplicated, and saved to the JSON output file).")
+        db = LocalDatabaseHandler()
 
     # Instantiate verifier
     verifier = JobVerifier()
