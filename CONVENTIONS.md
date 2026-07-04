@@ -12,7 +12,7 @@ This skill enables AI agents to scrape, verify, deduplicate, and store job posti
 - **Multi-Source Scraping**: Parallel scraping from LinkedIn, Glassdoor, and Indeed using `python-jobspy` (resilient to Cloudflare blocks).
 - **Rule-Based Verification**: Precompiled regex-based verification to filter job listings by title/role match, location matching (including remote), and experience level.
 - **Smart Deduplication**: Computes a SHA256 dedup key using `title | company | location` to merge duplicate job listings across platforms.
-- **Hybrid Storage**: Saves results to MongoDB Atlas (if configured) or falls back to local in-memory deduplication and exports a clean sequential JSON file.
+- **Hybrid Storage**: Saves results to MongoDB Atlas (if configured) or falls back to local in-memory deduplication. The AI must create a JSON output file at the same location where the AI is running.
 
 ## Execution Guide for Agents
 
@@ -37,10 +37,10 @@ python3.11 main.py --role "<Job Role>" --location "<Location>" --experience "<Ex
 - `--location` (default: `"Pune"`): Search location (supports city names or `"Remote"`).
 - `--experience` (default: `"1-3 years"`): Expected experience level (e.g., `"fresher"`, `"1-3 years"`, `"senior"`).
 - `--limit` (default: `30`): Maximum raw jobs to fetch per platform.
-- `--output` (default: `"scraped_jobs.json"`): Destination file path for verified results.
+- `--output` (default: `"scraped_jobs.json"`): Destination JSON file path for verified results (created at the same location where the AI is running).
 
-### 3. Reading Results
-Once execution is complete, the results are formatted as a JSON array in the output file specified by `--output`. Read and summarize these results for the user.
+### 3. Output Generation & Results
+Once execution is complete, the AI must create a JSON output file containing the verified results at the same location where the AI is running (the current working directory). The output format must be JSON.
 
 ## Database & Local Execution modes
 

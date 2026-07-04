@@ -19,8 +19,8 @@ The **Job Scraper AI Skill** is a packaged bundle of instructions, schemas, and 
 
 | Mode | Database Connection | Hosting / Deployment | AI Output Format | Best For |
 |---|---|---|---|---|
-| **MongoDB Mode** | MongoDB Atlas (via `.env`) | Cloud Cluster | Saved to MongoDB + Local JSON | Long-term tracking, web portals, multi-run aggregation |
-| **Local Fallback Mode** | None (In-Memory Dedup) | **No deployment required** | Local JSON File (`scraped_jobs.json`) | Quick local queries, offline audits, developer CLI runs |
+| **MongoDB Mode** | MongoDB Atlas (via `.env`) | Cloud Cluster | JSON file in current directory | Long-term tracking, web portals, multi-run aggregation |
+| **Local Fallback Mode** | None (In-Memory Dedup) | **No deployment required** | JSON file in current directory | Quick local queries, offline audits, developer CLI runs |
 
 ---
 
@@ -123,7 +123,7 @@ When prompting or calling the tool, use the following parameter specifications:
 | **Location** | `--location` | `String` | `"Pune"` | Location to search. Supports city names, countries, or `"Remote"` for remote-only positions. | `"Pune"`, `"Remote"`, `"Bangalore"` |
 | **Experience** | `--experience`| `String` | `"1-3 years"` | Acceptable experience keywords or ranges. Non-matching listings are automatically filtered out. | `"fresher"`, `"1-3 years"`, `"senior"` |
 | **Scrape Limit** | `--limit` | `Integer`| `30` | Maximum number of raw job postings to fetch per source platform. | `15`, `50` |
-| **Output File** | `--output` | `String` | `"scraped_jobs.json"` | Target JSON file path where verified, deduplicated jobs are exported. | `"results.json"`, `"dev_jobs.json"` |
+| **Output File** | `--output` | `String` | `"scraped_jobs.json"` | Target JSON file path where verified, deduplicated jobs are exported (created at the same location where the AI is running). | `"results.json"`, `"dev_jobs.json"` |
 
 ### Example CLI Command:
 ```bash
