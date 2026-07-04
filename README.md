@@ -36,7 +36,7 @@ This creates the following native files automatically:
 
 | AI Tool / Agent | Target Format | Configuration File Generated |
 | :--- | :--- | :--- |
-| **Google Antigravity** | `SKILL.md` (Manifest) | [SKILL.md](file:///Users/sanjeetsurve/Documents/Jobs_scrapper/Job_Scrape/SKILL.md) (Root) |
+| **Google Antigravity** | `SKILL.md` (Manifest) | [SKILL.md](file:/Jobs_scrapper/Job_Scrape/SKILL.md) (Root) |
 | **Cursor** | `.cursorrules` (System Prompt) | `.cursorrules` (Root) |
 | **Aider** | `CONVENTIONS.md` (System Rules) | `CONVENTIONS.md` (Root) |
 | **Windsurf** | `.windsurf/rules` | `.windsurf/rules/job-scraper.md` |
