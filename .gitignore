@@ -2,20 +2,33 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+
+# Environments
 venv/
 .venv/
 env/
 .env
 
-
-# Local databases or logs
+# Local databases, logs, and scraped outputs
 *.log
 scraped_jobs.json
 glassdoor_search.html
 *.db
 
-# IDE config
+# Temporary agent / tool directories
+.agents/
+.hermes/
+.vibe/
+
+# Python packaging and distributions
+build/
+dist/
+*.egg-info/
+*.egg
+
+# IDE config (excluding committed rules/conventions)
 .vscode/
 .idea/
 .DS_Store
-test
+test/
