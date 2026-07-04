@@ -6,3 +6,4 @@ lxml>=4.6.0
 curl_cffi>=0.5.0
 python-jobspy>=1.1.0
 dnspython>=2.0.0
+pypdf>=3.0.0

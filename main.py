@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from typing import List, Tuple
 from src.config import Config
 from src.database import DatabaseHandler, LocalDatabaseHandler
@@ -7,6 +8,7 @@ from src.interfaces import DatabaseInterface
 from src.verifier import JobVerifier
 from src.scrapers import get_scrapers
 from src.models import Job
+from cv_matcher.matcher import run_cv_matching
 
 def parse_args():
     """Parses command-line arguments."""
@@ -16,6 +18,10 @@ def parse_args():
     parser.add_argument("--experience", type=str, default="1-3 years", help="Required experience level (e.g., '1-3 years', 'Entry Level')")
     parser.add_argument("--output", type=str, default="scraped_jobs.json", help="Path to save the JSON output file")
     parser.add_argument("--limit", type=int, default=30, help="Max jobs to scrape per source (default: 30)")
+    parser.add_argument("--cv", type=str, default="cv.pdf", help="Path to your CV PDF file")
+    parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
+    parser.add_argument("--skip-matching", action="store_true", help="Skip matching jobs with CV using LLM")
+    parser.add_argument("--gemini-model", type=str, default="gemini-2.5-flash", help="Gemini model to use for scoring")
     return parser.parse_args()
 
 def execute_scraping(scrapers: list, args) -> List[Job]:
@@ -89,6 +95,53 @@ def print_summary(total_scraped: int, verified_count: int, new_inserted: int, up
 def main():
     args = parse_args()
     
+    # 1. Check if we should only run CV matching on existing scraped_jobs.json
+    if args.match_only:
+        print("=" * 60)
+        print("Running CV Matching Mode Only")
+        print(f"CV: {args.cv}")
+        print(f"Jobs Source: {args.output}")
+        print("=" * 60)
+        
+        if not os.path.exists(args.cv):
+            print(f"[Error] CV file not found at '{args.cv}'. Please place your CV PDF in the root directory or specify its path with --cv.")
+            return
+        
+        if not os.path.exists(args.output):
+            print(f"[Error] Scraped jobs file not found at '{args.output}'. Please run scraping first or verify the path.")
+            return
+            
+        try:
+            all_results, matched_results = run_cv_matching(
+                cv_path=args.cv,
+                jobs_json_path=args.output,
+                model=args.gemini_model
+            )
+            
+            # Print general/all scores
+            print("\n" + "=" * 60)
+            print("ALL JOB TITLES AND MATCH SCORES (0-10):")
+            print("=" * 60)
+            for res in all_results:
+                print(f"- {res['title']} ({res['company']}) - Score: {res['score']}/10")
+                print(f"  Explanation: {res['explanation']}")
+            
+            # Print match score > 6
+            print("\n" + "=" * 60)
+            print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED):")
+            print("=" * 60)
+            if not matched_results:
+                print("No jobs with match score above 6.")
+            else:
+                for res in matched_results:
+                    print(f"- {res['title']}")
+            print("=" * 60 + "\n")
+            
+        except Exception as e:
+            print(f"[Error] CV matching failed: {e}")
+        return
+
+    # 2. Otherwise run scraping as normal
     print("=" * 60)
     print(f"Starting Job Scraper Engine")
     print(f"Role: {args.role}")
@@ -139,6 +192,41 @@ def main():
     
     # Close database connection
     db.close()
+
+    # Match CV if not skipped
+    if not args.skip_matching:
+        if os.path.exists(args.cv):
+            try:
+                all_results, matched_results = run_cv_matching(
+                    cv_path=args.cv,
+                    jobs_json_path=args.output,
+                    model=args.gemini_model
+                )
+                
+                # Print general/all scores
+                print("\n" + "=" * 60)
+                print("ALL JOB TITLES AND MATCH SCORES (0-10):")
+                print("=" * 60)
+                for res in all_results:
+                    print(f"- {res['title']} ({res['company']}) - Score: {res['score']}/10")
+                    print(f"  Explanation: {res['explanation']}")
+                
+                # Print match score > 6
+                print("\n" + "=" * 60)
+                print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED):")
+                print("=" * 60)
+                if not matched_results:
+                    print("No jobs with match score above 6.")
+                else:
+                    for res in matched_results:
+                        print(f"- {res['title']}")
+                print("=" * 60 + "\n")
+                
+            except Exception as e:
+                print(f"[Error] CV matching failed: {e}")
+        else:
+            print(f"\n[CV Matcher Info] CV file '{args.cv}' not found. Skipping CV matching.")
+            print("To run CV matching, please place your CV PDF file in the root folder (default name: cv.pdf) or specify the path via --cv.")
 
 if __name__ == "__main__":
     main()

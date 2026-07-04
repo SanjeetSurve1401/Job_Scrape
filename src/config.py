@@ -10,4 +10,8 @@ class Config:
     COLLECTION_NAME = os.getenv("COLLECTION_NAME", "jobs")
     GLASSDOOR_USER_AGENT = os.getenv("GLASSDOOR_USER_AGENT", "")
     GLASSDOOR_COOKIE = os.getenv("GLASSDOOR_COOKIE", "")
+    GEMINI_API = os.getenv("GEMINI_API", "")
+    GROQ_API = os.getenv("GROQ_API", "")
+
+
 
