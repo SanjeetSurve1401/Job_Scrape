@@ -148,7 +148,7 @@ Add the project directory to the `skills_paths` config:
 from google.antigravity import Agent, LocalAgentConfig
 
 config = LocalAgentConfig(
-    skills_paths=["/Users/sanjeetsurve/Documents/Jobs_scrapper/Job_Scrape"]
+    skills_paths=["/Users/pc_name/Documents/Jobs_scrapper/Job_Scrape"]
 )
 
 async with Agent(config) as agent:
