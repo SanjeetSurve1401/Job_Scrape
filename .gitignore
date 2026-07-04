@@ -7,15 +7,15 @@ venv/
 env/
 .env
 
-# Session / Credentials / Config files
-linkedin_cookies.json
-glassdoor_session.json
 
 # Local databases or logs
 *.log
 scraped_jobs.json
+glassdoor_search.html
+*.db
 
 # IDE config
 .vscode/
 .idea/
 .DS_Store
+test
