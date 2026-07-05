@@ -17,6 +17,16 @@ class DatabaseInterface(ABC):
         ...
 
     @abstractmethod
+    def find_job_by_key(self, dedup_key: str) -> dict:
+        """
+        Finds a job by its deduplication key.
+
+        Returns:
+            Dictionary representing the job or None.
+        """
+        ...
+
+    @abstractmethod
     def close(self) -> None:
         """Closes the database connection."""
         ...

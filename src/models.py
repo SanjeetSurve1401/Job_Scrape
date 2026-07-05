@@ -16,6 +16,8 @@ class Job:
     experience_required: Optional[str] = None
     scraped_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     job_id: Optional[str] = None
+    score: Optional[int] = None
+    explanation: Optional[str] = None
 
     def dedup_key(self) -> str:
         """
@@ -38,5 +40,7 @@ class Job:
             "experience_required": self.experience_required,
             "scraped_at": self.scraped_at.isoformat() if isinstance(self.scraped_at, datetime) else self.scraped_at,
             "job_id": self.job_id,
-            "dedup_key": self.dedup_key()
+            "dedup_key": self.dedup_key(),
+            "score": self.score,
+            "explanation": self.explanation
         }

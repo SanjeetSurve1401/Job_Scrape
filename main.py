@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 from typing import List, Tuple
+from concurrent.futures import ThreadPoolExecutor
 from src.config import Config
 from src.database import DatabaseHandler, LocalDatabaseHandler
 from src.interfaces import DatabaseInterface
@@ -24,50 +25,109 @@ def parse_args():
     parser.add_argument("--groq-model", type=str, default="llama-3.1-8b-instant", help="Groq model to use for scoring")
     return parser.parse_args()
 
-def execute_scraping(scrapers: list, args) -> List[Job]:
-    """Runs all discovered scrapers and collects raw jobs."""
+def execute_scraping(scrapers: list, args, limit: int) -> List[Job]:
+    """Runs all discovered scrapers in parallel and collects raw jobs, distributing the limit."""
     all_scraped_jobs = []
-    remaining_limit = args.limit
-    for scraper_cls in scrapers:
-        if remaining_limit <= 0:
-            print(f"\n[Scraping] Total limit of {args.limit} jobs reached. Skipping remaining scrapers.")
-            break
+    total_scrapers = len(scrapers)
+    if total_scrapers == 0:
+        return []
+
+    # Calculate equal share limit for each scraper using ceiling division
+    scraper_limit = max(1, (limit + total_scrapers - 1) // total_scrapers)
+
+    def run_one_scraper(scraper_cls):
         try:
             scraper = scraper_cls()
             scraper_name = scraper.__class__.__name__
-            print(f"\n[Scraping] Launching {scraper_name}...")
-            jobs = scraper.scrape(args.role, args.location, args.experience, limit=remaining_limit)
+            print(f"\n[Scraping] Launching {scraper_name} in parallel (Limit: {scraper_limit})...")
+            jobs = scraper.scrape(args.role, args.location, args.experience, limit=scraper_limit)
             print(f"[Scraping] {scraper_name} returned {len(jobs)} jobs.")
-            all_scraped_jobs.extend(jobs)
-            remaining_limit -= len(jobs)
+            return jobs
         except Exception as e:
             scraper_name = scraper_cls.__name__
             print(f"[Error] Scraper {scraper_name} failed: {e}")
-    return all_scraped_jobs[:args.limit]
+            return []
 
-def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs: List[Job], args) -> Tuple[int, int, int, List[dict]]:
-    """Filters, verifies, and saves scraped jobs to database."""
+    # Execute in parallel using ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=total_scrapers) as executor:
+        results = executor.map(run_one_scraper, scrapers)
+
+    for jobs in results:
+        all_scraped_jobs.extend(jobs)
+
+    return all_scraped_jobs[:limit]
+
+
+
+def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs: List[Job], args, cv_text: str = "") -> Tuple[int, int, int, List[dict]]:
+    """Filters, verifies, scores inline via Groq, and saves scraped jobs to database."""
     verified_jobs_count = 0
     new_jobs_inserted = 0
     existing_jobs_updated = 0
     saved_jobs_list = []
 
-    print("\n[Verifying & Saving] Processing jobs...")
+    # Instantiate GroqClient if matching is requested
+    client = None
+    if cv_text:
+        from cv_matcher.groq_client import GroqClient
+        client = GroqClient(model=args.groq_model)
+
+    from src.database import DatabaseHandler
+    is_mongodb = isinstance(db, DatabaseHandler)
+
+    print("\n[Verifying, Scoring & Saving] Processing jobs...")
     for job in raw_jobs:
         if verifier.verify(job, args.role, args.location, args.experience):
             verified_jobs_count += 1
-            try:
-                is_new, saved_doc = db.save_job(job)
-                if is_new:
-                    new_jobs_inserted += 1
-                    print(f"  [NEW] {job.title} at {job.company} ({job.location}) from {job.site}")
-                else:
-                    existing_jobs_updated += 1
-                    print(f"  [MERGED] {job.title} at {job.company} ({job.location}) -> Sites: {saved_doc['site']}")
+            
+            # 1. Check if job is already in the database and already has a score (caching)
+            dedup_key = job.dedup_key()
+            existing_doc = db.find_job_by_key(dedup_key)
+            
+            score = None
+            explanation = None
+            
+            if existing_doc and existing_doc.get("score") is not None:
+                score = existing_doc.get("score")
+                explanation = existing_doc.get("explanation")
+                print(f"  [Cached Score] '{job.title}' at {job.company} -> Score: {score}/10")
+            elif client:
+                print(f"  [Scoring API Call] '{job.title}' at {job.company}...")
+                res = client.get_match_score(cv_text, job.to_dict())
+                score = res["score"]
+                explanation = res["explanation"]
                 
-                saved_jobs_list.append(saved_doc)
+                # Respect rate limit between Groq API calls (30 RPM safe)
+                import time
+                time.sleep(2.0)
+                
+            job.score = score
+            job.explanation = explanation
+            
+            # Determine if we should save to DB (MongoDB/Local)
+            # MongoDB Mode: only save if score > 6 (or if matching was skipped)
+            # Local Fallback Mode: always save to database so it ends up in the JSON output file
+            should_save = True
+            if is_mongodb and cv_text and score is not None and score <= 6:
+                should_save = False
+
+            try:
+                if should_save:
+                    is_new, saved_doc = db.save_job(job)
+                    if is_new:
+                        new_jobs_inserted += 1
+                        print(f"  [NEW (Saved to DB)] {job.title} at {job.company} ({job.location}) -> Score: {score}/10")
+                    else:
+                        existing_jobs_updated += 1
+                        print(f"  [MERGED (Saved to DB)] {job.title} at {job.company} ({job.location}) -> Score: {score}/10")
+                    saved_jobs_list.append(saved_doc)
+                else:
+                    # Filtered out from MongoDB, but keep in our local list for JSON export
+                    job_dict = job.to_dict()
+                    print(f"  [Filtered (JSON Only)] {job.title} at {job.company} ({job.location}) -> Score: {score}/10 (Excluded from MongoDB)")
+                    saved_jobs_list.append(job_dict)
             except Exception as e:
-                print(f"  [Error] Failed to save job '{job.title}' to MongoDB: {e}")
+                print(f"  [Error] Failed to save job '{job.title}' to database: {e}")
 
     return verified_jobs_count, new_jobs_inserted, existing_jobs_updated, saved_jobs_list
 
@@ -106,6 +166,18 @@ def main():
         print("[Warning] Maximum limit is 25 only. Adjusting limit to 25.")
         print("=" * 60 + "\n")
         args.limit = 25
+        
+    # Load CV text if we need to do matching
+    cv_text = ""
+    if not args.skip_matching:
+        if os.path.exists(args.cv):
+            try:
+                from cv_matcher.pdf_parser import extract_text_from_pdf
+                print(f"\n[CV Matcher] Extracting text from CV: {args.cv}...")
+                cv_text = extract_text_from_pdf(args.cv)
+                print(f"[CV Matcher] Extracted {len(cv_text)} characters from CV.")
+            except Exception as e:
+                print(f"[Error] Failed to extract text from CV: {e}")
     
     # 1. Check if we should only run CV matching on existing scraped_jobs.json
     if args.match_only:
@@ -187,21 +259,64 @@ def main():
     # Dynamically discover scrapers (OCP)
     scraper_classes = get_scrapers()
     
-    # Scrape raw jobs
-    all_raw_jobs = execute_scraping(scraper_classes, args)
-    print(f"\nTotal raw jobs scraped: {len(all_raw_jobs)}")
+    verified_jobs_dict = {}
+    total_raw_scraped = 0
+    total_new_inserted = 0
+    total_updated_count = 0
     
-    # Process, verify and save to DB
-    verified_count, new_inserted, updated_count, saved_jobs = process_and_save_jobs(
-        db, verifier, all_raw_jobs, args
-    )
+    attempts = 0
+    max_attempts = 5
+    multiplier = 1.0
     
+    while len(verified_jobs_dict) < args.limit and attempts < max_attempts:
+        attempts += 1
+        if attempts > 1:
+            print(f"\n[Scraper Loop] Target verified limit ({args.limit}) not met (Currently verified: {len(verified_jobs_dict)}).")
+            print(f"[Scraper Loop] Scraping more jobs... (Attempt {attempts}/{max_attempts})")
+            # Scale scraping limit to look deeper
+            multiplier += 1.0
+            
+        remaining_target = args.limit - len(verified_jobs_dict)
+        current_scrape_limit = int(remaining_target * multiplier)
+        
+        # Scrape raw jobs
+        raw_jobs = execute_scraping(scraper_classes, args, limit=current_scrape_limit)
+        total_raw_scraped += len(raw_jobs)
+        
+        if not raw_jobs:
+            print("[Scraper Loop] No more raw jobs returned by scrapers. Stopping loop.")
+            break
+            
+        # Process, verify, score inline and save to DB
+        verified_count, new_inserted, updated_count, saved_jobs = process_and_save_jobs(
+            db, verifier, raw_jobs, args, cv_text=cv_text
+        )
+        
+        total_new_inserted += new_inserted
+        total_updated_count += updated_count
+        
+        # Add newly saved/verified jobs to our tracking dict
+        for doc in saved_jobs:
+            title = doc.get("title", "")
+            company = doc.get("company", "")
+            location = doc.get("location", "")
+            key = f"{title.lower().strip()}|{company.lower().strip()}|{location.lower().strip()}"
+            verified_jobs_dict[key] = doc
+            
+        # If no new verified jobs were found in this attempt, stop to prevent rate limit blocks
+        if verified_count == 0:
+            print("[Scraper Loop] No new jobs passed verification in this attempt. Stopping loop.")
+            break
+            
     # Print execution summary
-    print_summary(len(all_raw_jobs), verified_count, new_inserted, updated_count)
+    print_summary(total_raw_scraped, len(verified_jobs_dict), total_new_inserted, total_updated_count)
     
     # Export to output JSON file
-    export_to_json(saved_jobs, args.output)
-    
+    if isinstance(db, LocalDatabaseHandler):
+        export_to_json(db.get_all_jobs(), args.output)
+    else:
+        export_to_json(list(verified_jobs_dict.values()), args.output)
+        
     # Close database connection
     db.close()
 

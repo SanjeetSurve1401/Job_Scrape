@@ -1,4 +1,6 @@
-from typing import Tuple
+import os
+import json
+from typing import Tuple, List, Dict, Any
 from pymongo import MongoClient, ReturnDocument
 from src.interfaces import DatabaseInterface
 from src.models import Job
@@ -47,6 +49,10 @@ class DatabaseHandler(DatabaseInterface):
                 update_fields["salary"] = job.salary
             if not existing_job.get("url") and job.url:
                 update_fields["url"] = job.url
+            if hasattr(job, "score") and job.score is not None:
+                update_fields["score"] = job.score
+            if hasattr(job, "explanation") and job.explanation:
+                update_fields["explanation"] = job.explanation
 
             # Perform single round-trip update and fetch
             updated_doc = self.collection.find_one_and_update(
@@ -69,6 +75,20 @@ class DatabaseHandler(DatabaseInterface):
             job_dict["_id"] = str(result.inserted_id)
             return True, job_dict
 
+    def find_job_by_key(self, dedup_key: str) -> dict:
+        """Finds a job by its deduplication key in MongoDB."""
+        doc = self.collection.find_one({"dedup_key": dedup_key})
+        if doc:
+            doc["_id"] = str(doc["_id"])
+        return doc
+
+    def get_all_jobs(self) -> list:
+        """Returns all jobs stored in the MongoDB collection."""
+        jobs = list(self.collection.find({}))
+        for job in jobs:
+            job["_id"] = str(job["_id"])
+        return jobs
+
     def close(self) -> None:
         """Closes connection to MongoDB."""
         try:
@@ -78,12 +98,34 @@ class DatabaseHandler(DatabaseInterface):
 
 
 class LocalDatabaseHandler(DatabaseInterface):
-    """In-memory database fallback when MongoDB is not available."""
-    def __init__(self):
+    """Local JSON file persistent database fallback when MongoDB is not available."""
+    def __init__(self, filename: str = "scraped_jobs.json"):
+        self.filename = filename
         self.jobs = {}
+        self.load_from_file()
+
+    def load_from_file(self) -> None:
+        """Loads existing jobs from the JSON database file at startup."""
+        if os.path.exists(self.filename):
+            try:
+                with open(self.filename, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for job_doc in data:
+                        title = job_doc.get("title", "")
+                        company = job_doc.get("company", "")
+                        location = job_doc.get("location", "")
+                        
+                        # Compute dedup_key dynamically
+                        normalized = f"{title.strip().lower()}|{company.strip().lower()}|{location.strip().lower()}"
+                        import hashlib
+                        dedup_key = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+                        self.jobs[dedup_key] = job_doc
+                print(f"Loaded {len(self.jobs)} existing jobs from local database '{self.filename}'.")
+            except Exception as e:
+                print(f"[Warning] Failed to load local database '{self.filename}': {e}")
 
     def save_job(self, job: Job) -> Tuple[bool, dict]:
-        """Deduplicates and saves job in memory."""
+        """Deduplicates and saves job locally."""
         title = (job.title or "").strip()
         company = (job.company or "").strip()
         location = (job.location or "").strip()
@@ -111,6 +153,10 @@ class LocalDatabaseHandler(DatabaseInterface):
                 existing_job["salary"] = job.salary
             if not existing_job.get("url") and job.url:
                 existing_job["url"] = job.url
+            if hasattr(job, "score") and job.score is not None:
+                existing_job["score"] = job.score
+            if hasattr(job, "explanation") and job.explanation:
+                existing_job["explanation"] = job.explanation
 
             return False, existing_job
         else:
@@ -123,6 +169,13 @@ class LocalDatabaseHandler(DatabaseInterface):
             self.jobs[dedup_key] = job_dict
             return True, job_dict
 
+    def find_job_by_key(self, dedup_key: str) -> dict:
+        """Finds a job by its deduplication key in local database."""
+        return self.jobs.get(dedup_key)
+
+    def get_all_jobs(self) -> list:
+        """Returns all jobs stored in memory."""
+        return list(self.jobs.values())
+
     def close(self) -> None:
         pass
-
