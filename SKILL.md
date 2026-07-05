@@ -44,5 +44,5 @@ Once execution is complete, the AI must create a JSON output file containing the
 
 ## Database & Local Execution modes
 
-- **MongoDB Mode**: If a `MONGO_URI` is present in `.env`, the scraper saves/updates postings in MongoDB Atlas using high-performance find-and-update.
-- **Local Fallback Mode**: If `MONGO_URI` is missing, empty, or fails to connect, the scraper automatically falls back to in-memory deduplication. The results are fully processed and saved to the output JSON file. **No database or external server deployment is required for local execution.**
+- **MongoDB Mode**: If a `MONGO_URI` is present in `.env`, the scraped jobs are successfully saved to the MongoDB database wherever the project is run.
+- **Local Fallback Mode**: If there is no MongoDB connection, then a local JSON database file (specified by `--output`) is created locally to store the results. **No database or external server deployment is required for local execution.**
