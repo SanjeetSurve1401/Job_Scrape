@@ -122,7 +122,7 @@ When prompting or calling the tool, use the following parameter specifications:
 | **Job Role** | `--role` | `String` | `"Software QA Engineer"` | Key title terms to scrape and verify. Precompiled regex filters out non-matching postings. | `"Python Developer"`, `"React Architect"` |
 | **Location** | `--location` | `String` | `"Pune"` | Location to search. Supports city names, countries, or `"Remote"` for remote-only positions. | `"Pune"`, `"Remote"`, `"Bangalore"` |
 | **Experience** | `--experience`| `String` | `"1-3 years"` | Acceptable experience keywords or ranges. Non-matching listings are automatically filtered out. | `"fresher"`, `"1-3 years"`, `"senior"` |
-| **Scrape Limit** | `--limit` | `Integer`| `30` | Maximum number of raw job postings to fetch per source platform. | `15`, `50` |
+| **Scrape Limit** | `--limit` | `Integer`| `30` | Total maximum number of raw job postings to fetch across all platforms. | `15`, `50` |
 | **Output File** | `--output` | `String` | `"scraped_jobs.json"` | Target JSON file path where verified, deduplicated jobs are exported (created at the same location where the AI is running). | `"results.json"`, `"dev_jobs.json"` |
 
 ### Example CLI Command:

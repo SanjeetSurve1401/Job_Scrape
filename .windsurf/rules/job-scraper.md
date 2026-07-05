@@ -29,14 +29,14 @@ python3.11 -m pip install -r requirements.txt
 ### 2. Running a Scrape
 Use the `run_command` tool to execute `main.py` with the desired arguments:
 ```bash
-python3.11 main.py --role "<Job Role>" --location "<Location>" --experience "<Experience Range>" --limit <Max per Source> --output "<JSON Path>"
+python3.11 main.py --role "<Job Role>" --location "<Location>" --experience "<Experience Range>" --limit <Total Max Jobs> --output "<JSON Path>"
 ```
 
 #### Command Arguments
 - `--role` (default: `"Software QA Engineer"`): Job title keywords (e.g., `"Python Developer"`, `"Data Analyst"`).
 - `--location` (default: `"Pune"`): Search location (supports city names or `"Remote"`).
 - `--experience` (default: `"1-3 years"`): Expected experience level (e.g., `"fresher"`, `"1-3 years"`, `"senior"`).
-- `--limit` (default: `30`): Maximum raw jobs to fetch per platform.
+- `--limit` (default: `30`): Total maximum raw jobs to fetch across all platforms.
 - `--output` (default: `"scraped_jobs.json"`): Destination JSON file path for verified results (created at the same location where the AI is running).
 
 ### 3. Output Generation & Results

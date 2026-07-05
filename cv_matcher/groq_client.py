@@ -4,20 +4,19 @@ import json
 from typing import Dict, Any
 from src.config import Config
 
-class GeminiClient:
-    def __init__(self, api_key: str = None, model: str = "gemini-2.5-flash"):
-        # Load API key from parameter, config, or environment variable
-        self.api_key = api_key or Config.GEMINI_API or os.getenv("GEMINI_API")
+class GroqClient:
+    def __init__(self, api_key: str = None, model: str = "llama-3.1-8b-instant"):
+        self.api_key = api_key or Config.GROQ_API or os.getenv("GROQ_API")
         if not self.api_key:
             raise ValueError(
-                "Gemini API key not found. Please set GEMINI_API in your .env file."
+                "Groq API key not found. Please set GROQ_API in your .env file."
             )
         self.model = model
-        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        self.url = "https://api.groq.com/openai/v1/chat/completions"
 
     def get_match_score(self, cv_text: str, job_details: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Sends the CV text and job details to Gemini and asks it to score the match.
+        Sends the CV text and job details to Groq and asks it to score the match.
         Returns a dictionary with 'score' (int) and 'explanation' (str).
         """
         job_info = f"""
@@ -51,30 +50,26 @@ Site: {job_details.get('site', 'N/A')}
         )
 
         payload = {
-            "contents": [
+            "model": self.model,
+            "messages": [
                 {
-                    "parts": [
-                        {
-                            "text": user_content
-                        }
-                    ]
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_content
                 }
             ],
-            "systemInstruction": {
-                "parts": [
-                    {
-                        "text": system_prompt
-                    }
-                ]
+            "response_format": {
+                "type": "json_object"
             },
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.2
-            }
+            "temperature": 0.2
         }
 
         headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
         }
 
         import time
@@ -97,7 +92,7 @@ Site: {job_details.get('site', 'N/A')}
                 res_json = response.json()
                 
                 # Extract text from response
-                text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+                text_response = res_json['choices'][0]['message']['content']
                 
                 # Clean JSON markdown blocks if present
                 clean_text = text_response.strip()
@@ -135,3 +130,9 @@ Site: {job_details.get('site', 'N/A')}
                         "score": 0,
                         "explanation": f"API request failed or failed to parse after {max_retries} attempts: {str(e)}"
                     }
+
+        # Fallback if all attempts hit 429 and loop completes
+        return {
+            "score": 0,
+            "explanation": "API request failed: All API requests hit rate limit (429) after multiple retries."
+        }

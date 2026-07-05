@@ -17,28 +17,33 @@ def parse_args():
     parser.add_argument("--location", type=str, default="Pune", help="Location to search for")
     parser.add_argument("--experience", type=str, default="1-3 years", help="Required experience level (e.g., '1-3 years', 'Entry Level')")
     parser.add_argument("--output", type=str, default="scraped_jobs.json", help="Path to save the JSON output file")
-    parser.add_argument("--limit", type=int, default=30, help="Max jobs to scrape per source (default: 30)")
+    parser.add_argument("--limit", type=int, default=15, help="Total max jobs to scrape across all sources (default: 15)")
     parser.add_argument("--cv", type=str, default="cv.pdf", help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
     parser.add_argument("--skip-matching", action="store_true", help="Skip matching jobs with CV using LLM")
-    parser.add_argument("--gemini-model", type=str, default="gemini-2.5-flash", help="Gemini model to use for scoring")
+    parser.add_argument("--groq-model", type=str, default="llama-3.1-8b-instant", help="Groq model to use for scoring")
     return parser.parse_args()
 
 def execute_scraping(scrapers: list, args) -> List[Job]:
     """Runs all discovered scrapers and collects raw jobs."""
     all_scraped_jobs = []
+    remaining_limit = args.limit
     for scraper_cls in scrapers:
+        if remaining_limit <= 0:
+            print(f"\n[Scraping] Total limit of {args.limit} jobs reached. Skipping remaining scrapers.")
+            break
         try:
             scraper = scraper_cls()
             scraper_name = scraper.__class__.__name__
             print(f"\n[Scraping] Launching {scraper_name}...")
-            jobs = scraper.scrape(args.role, args.location, args.experience, limit=args.limit)
+            jobs = scraper.scrape(args.role, args.location, args.experience, limit=remaining_limit)
             print(f"[Scraping] {scraper_name} returned {len(jobs)} jobs.")
             all_scraped_jobs.extend(jobs)
+            remaining_limit -= len(jobs)
         except Exception as e:
             scraper_name = scraper_cls.__name__
             print(f"[Error] Scraper {scraper_name} failed: {e}")
-    return all_scraped_jobs
+    return all_scraped_jobs[:args.limit]
 
 def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs: List[Job], args) -> Tuple[int, int, int, List[dict]]:
     """Filters, verifies, and saves scraped jobs to database."""
@@ -95,6 +100,13 @@ def print_summary(total_scraped: int, verified_count: int, new_inserted: int, up
 def main():
     args = parse_args()
     
+    # Restrict limit to 25 and warn if it is higher
+    if args.limit > 25:
+        print("\n" + "=" * 60)
+        print("[Warning] Maximum limit is 25 only. Adjusting limit to 25.")
+        print("=" * 60 + "\n")
+        args.limit = 25
+    
     # 1. Check if we should only run CV matching on existing scraped_jobs.json
     if args.match_only:
         print("=" * 60)
@@ -115,7 +127,7 @@ def main():
             all_results, matched_results = run_cv_matching(
                 cv_path=args.cv,
                 jobs_json_path=args.output,
-                model=args.gemini_model
+                model=args.groq_model
             )
             
             # Print general/all scores
@@ -147,7 +159,7 @@ def main():
     print(f"Role: {args.role}")
     print(f"Location: {args.location}")
     print(f"Experience Criteria: {args.experience}")
-    print(f"Limit per source: {args.limit}")
+    print(f"Total limit: {args.limit}")
     print("=" * 60)
 
     # Initialize Database using Constructor-based Dependency Injection
@@ -200,7 +212,7 @@ def main():
                 all_results, matched_results = run_cv_matching(
                     cv_path=args.cv,
                     jobs_json_path=args.output,
-                    model=args.gemini_model
+                    model=args.groq_model
                 )
                 
                 # Print general/all scores
