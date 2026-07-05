@@ -1,13 +1,26 @@
 # Job Scraper Engine — Multi-Tool AI Skill & CLI
 
-**A modular, highly resilient, and extensible Job Scraper packaged as an AI Skill compatible with Cursor, Claude Code, Aider, Windsurf, Copilot, Antigravity, Mistral Vibe, and Hermes Agent.**
+**A modular, highly resilient, and parallelized Job Scraper packaged as an AI Skill compatible with Cursor, Claude Code, Aider, Windsurf, Copilot, Antigravity, Mistral Vibe, and Hermes Agent.**
 
-This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed** based on specified criteria (Role, Location, and Experience), verifies them using regex filters, merges duplicates across platforms, and stores them in MongoDB Atlas or falls back to local JSON storage.
-
+This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed** concurrently in parallel, verifies them using regex filters, merges duplicates, scores matching inline against a CV using Groq (LLM), and stores matches in MongoDB Atlas or falls back to a persistent local JSON database.
 
 [![AI Skill](https://img.shields.io/badge/AI%20Skill-job--scraper-brightgreen?style=for-the-badge)](#ai-skill-integration)
 [![Compatibility](https://img.shields.io/badge/AIs-8%20Tools-blue?style=for-the-badge)](#multi-tool-compatibility)
 [![Database](https://img.shields.io/badge/Database-MongoDB%20%2F%20Local-orange?style=for-the-badge)](#database--local-fallback-modes)
+
+---
+
+## Key Features & Capabilities
+
+- **Parallel Scraping Concurrency**: Launches LinkedIn, Glassdoor, and Indeed scrapers concurrently in parallel threads (using `ThreadPoolExecutor`) to optimize wait times from ~45 seconds down to **~15 seconds**.
+- **Balanced Limit Distribution**: Dynamically divides the target limit (default: 15, max: 25) evenly across active platforms to retrieve a balanced set of listings instead of fetching from a single source.
+- **Dynamic Scraper Retry Loop**: If the number of verified jobs falls short of the target limit (due to verification filtering), the scraper runs up to **5 attempts** with deeper search offsets until the target limit is met.
+- **Inline CV Matching & Caching**:
+  - Scores verified jobs against a PDF CV using Groq (`llama-3.1-8b-instant`) *inline* during processing.
+  - Automatically queries the database using `find_job_by_key` to retrieve cached scores and skip redundant API calls.
+  - Implements a rate-limit safe `2.0` seconds delay between Groq calls.
+- **MongoDB Score Threshold Filtering**: If MongoDB is connected, jobs are stored in the cloud database **only if** their match score is greater than 6 (score 6+).
+- **Persistent Local Fallback Database**: If MongoDB is disconnected, it falls back to a persistent local JSON database (specified by `--output`) which loads existing jobs at startup and merges new listings.
 
 ---
 
@@ -19,8 +32,8 @@ The **Job Scraper AI Skill** is a packaged bundle of instructions, schemas, and 
 
 | Mode | Database Connection | Hosting / Deployment | AI Output Format | Best For |
 |---|---|---|---|---|
-| **MongoDB Mode** | MongoDB Atlas (via `.env`) | Cloud Cluster | JSON file in current directory | Long-term tracking, web portals, multi-run aggregation |
-| **Local Fallback Mode** | None (In-Memory Dedup) | **No deployment required** | JSON file in current directory | Quick local queries, offline audits, developer CLI runs |
+| **MongoDB Mode** | MongoDB Atlas (via `.env`) | Cloud Database (only saves jobs with Score > 6) | JSON file in current directory | Long-term tracking, web portals, storing only top matches |
+| **Local Fallback Mode** | None (Local JSON File) | **No deployment required** (saves all jobs) | JSON file in current directory | Quick local queries, offline audits, persistent local database |
 
 ---
 
@@ -54,7 +67,7 @@ Job_Scrape/
 ├── .env                        # MongoDB URI, Glassdoor credentials, and database config
 ├── .gitignore                  
 ├── requirements.txt            
-├── main.py                     # Main CLI Orchestrator and entrypoint
+├── main.py                     # Main CLI Orchestrator (scrapes, verifies, scores inline, exports)
 ├── SKILL.md                    # Core AI Skill Manifest
 ├── .cursorrules                # Cursor System Rules
 ├── CONVENTIONS.md              # Aider System Rules
@@ -64,7 +77,7 @@ Job_Scrape/
 └── src/
     ├── __init__.py
     ├── config.py               # Config loader from .env
-    ├── database.py             # MongoDB Handler + LocalDatabaseHandler fallback
+    ├── database.py             # MongoDB Handler + Persistent Local JSON Handler
     ├── interfaces.py           # Database and Verifier interfaces (DIP)
     ├── models.py               # Job data model & SHA256 dedup hashing
     ├── verifier.py             # Regex job role, location, and experience verifier
@@ -89,21 +102,17 @@ python3.11 -m pip install -r requirements.txt
 ### 2. Configure Environment (`.env`)
 Create a `.env` file in the root directory. Below is the reference configuration:
 
-
-#### Environment Variables Specification:
-
 | Variable Name | Required | Purpose / Description | How to Obtain / Configure |
 | :--- | :--- | :--- | :--- |
-| `MONGO_URI` | No (Falls back to local) | Connection URI for the MongoDB Atlas database. | 1. Log in to your [MongoDB Atlas](https://cloud.mongodb.com) account.<br>2. Go to **Database** under Deployment.<br>3. Click **Connect** on your Cluster.<br>4. Select **Drivers** (connection string).<br>5. Copy the connection string and replace `<username>` and `<password>` with your database user credentials. |
+| `MONGO_URI` | No (Falls back to local) | Connection URI for the MongoDB Atlas database. | 1. Log in to your [MongoDB Atlas](https://cloud.mongodb.com) account.<br>2. Go to **Database** under Deployment.<br>3. Click **Connect** on your Cluster.<br>4. Select **Drivers** (connection string).<br>5. Copy the connection string and replace `<username>` and `<password>` with database user credentials. |
 | `DB_NAME` | No | The target MongoDB database name. | Specify any database name of your choice (e.g., `JobScrapperDB`). If it doesn't exist, MongoDB will create it automatically. |
 | `COLLECTION_NAME` | No | The collection name inside your MongoDB database. | Specify the name of the collection where job documents should be stored (e.g., `jobs`). |
-| `GLASSDOOR_USER_AGENT`| Yes (for Glassdoor) | User-Agent header value to bypass Glassdoor security blocks. | 1. Open [Glassdoor](https://www.glassdoor.com) in your browser and log in.<br>2. Open Developer Tools (`F12` or Right-click -> **Inspect**).<br>3. Go to the **Network** tab and refresh the page.<br>4. Click on any document/request to `glassdoor.com`.<br>5. Scroll down to **Request Headers** and copy the full value of the `User-Agent` key. |
-| `GLASSDOOR_COOKIE` | Yes (for Glassdoor) | Authenticated cookie header string for session bypass. | 1. Follow the same browser Network inspection steps as above.<br>2. Under the **Request Headers** section, find the `Cookie` header.<br>3. Copy the entire cookie string value and paste it here. |
-
+| `GROQ_API` | Yes (for matching) | Developer key for Groq Cloud API. | Sign up at [Groq Console](https://console.groq.com) and create an API key. |
+| `GLASSDOOR_USER_AGENT`| Yes (for Glassdoor) | User-Agent header value to bypass Glassdoor security blocks. | 1. Open [Glassdoor](https://www.glassdoor.com) and log in.<br>2. Open Developer Tools (`F12` -> Network).<br>3. Inspect the headers of any document/request to `glassdoor.com` and copy the `User-Agent` key. |
+| `GLASSDOOR_COOKIE` | Yes (for Glassdoor) | Authenticated cookie header string for session bypass. | Copy the full `Cookie` header value from request headers on any Glassdoor page request. |
 
 > [!NOTE]
-> If `MONGO_URI` is omitted, empty, or fails to connect, the engine automatically degrades to **Local Fallback Mode** (saving directly to JSON).
-
+> If `MONGO_URI` is omitted, empty, or fails to connect, the engine automatically degrades to **Local Fallback Mode** (reading/writing to `scraped_jobs.json`).
 
 ### 3. Execution (CLI & Manual)
 Run the script using:
@@ -115,15 +124,14 @@ python3.11 main.py --role "<Job Role>" --location "<Location>" --experience "<Ex
 
 ## AI Skill Parameter Specifications
 
-When prompting or calling the tool, use the following parameter specifications:
-
 | Parameter Name | Argument Flag | Data Type | Default Value | Description / Validation Rules | Example Values |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Job Role** | `--role` | `String` | `"Software QA Engineer"` | Key title terms to scrape and verify. Precompiled regex filters out non-matching postings. | `"Python Developer"`, `"React Architect"` |
-| **Location** | `--location` | `String` | `"Pune"` | Location to search. Supports city names, countries, or `"Remote"` for remote-only positions. | `"Pune"`, `"Remote"`, `"Bangalore"` |
+| **Location** | `--location` | `String` | `"Pune"` | Location to search. Supports city names, countries, or `"Remote"`. | `"Pune"`, `"Remote"`, `"Bangalore"` |
 | **Experience** | `--experience`| `String` | `"1-3 years"` | Acceptable experience keywords or ranges. Non-matching listings are automatically filtered out. | `"fresher"`, `"1-3 years"`, `"senior"` |
-| **Scrape Limit** | `--limit` | `Integer`| `30` | Total maximum number of raw job postings to fetch across all platforms. | `15`, `50` |
-| **Output File** | `--output` | `String` | `"scraped_jobs.json"` | Target JSON file path where verified, deduplicated jobs are exported (created at the same location where the AI is running). | `"results.json"`, `"dev_jobs.json"` |
+| **Scrape Limit** | `--limit` | `Integer`| `15` | Total maximum number of raw/verified jobs to fetch. Capped at a maximum limit of **25**. | `10`, `25` |
+| **Output File** | `--output` | `String` | `"scraped_jobs.json"` | Target JSON file path where verified, deduplicated jobs are exported. | `"results.json"`, `"dev_jobs.json"` |
+| **Groq Model** | `--groq-model` | `String` | `"llama-3.1-8b-instant"` | Groq model used for inline match scoring. | `"llama-3.1-8b-instant"`, `"llama-3.3-70b-versatile"` |
 
 ### Example CLI Command:
 ```bash
@@ -132,11 +140,11 @@ python3.11 main.py --role "Software Engineer" --location "Pune" --experience "1-
 
 ---
 
-## Database & Local Fallback Modes
+## Storage & Filter Logic (DIP)
 
 The engine leverages **Constructor-based Dependency Injection** to dynamically select the storage layer:
-1. **With Database Access**: If `MONGO_URI` is provided, the scraper connects to MongoDB Atlas, utilizes a unique index on `dedup_key` to merge multi-source postings, updates existing documents, and appends new ones.
-2. **Without Deployment/Database**: If MongoDB is offline, unconfigured, or unreachable, the orchestrator triggers `LocalDatabaseHandler` which executes in-memory deduplication. Verified listings are written to the JSON file with consecutive serial numbers. **No server setup or database installation is required.**
+1. **MongoDB Mode**: Connections are managed in `DatabaseHandler`. It utilizes a unique index on `dedup_key` to merge postings, but **only saves jobs with a CV match score > 6** to ensure the cloud database only stores relevant matches.
+2. **Local Fallback Mode**: If MongoDB is offline or unreachable, `LocalDatabaseHandler` loads existing jobs from the output JSON file at startup, merges/deduplicates new postings, and writes the complete history back to the output JSON file. **No server setup or database installation is required.**
 
 ---
 
