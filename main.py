@@ -17,11 +17,10 @@ def parse_args():
     parser.add_argument("--role", type=str, default="Software QA Engineer", help="Job role to search for")
     parser.add_argument("--location", type=str, default="Pune", help="Location to search for")
     parser.add_argument("--experience", type=str, default="1-3 years", help="Required experience level (e.g., '1-3 years', 'Entry Level')")
-    parser.add_argument("--output", type=str, default="scraped_jobs.json", help="Path to save the JSON output file")
+    parser.add_argument("--output", type=str, default=None, help="Path to save the JSON output file")
     parser.add_argument("--limit", type=int, default=15, help="Total max jobs to scrape across all sources (default: 15)")
-    parser.add_argument("--cv", type=str, default="cv.pdf", help="Path to your CV PDF file")
+    parser.add_argument("--cv", type=str, default=None, help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
-    parser.add_argument("--skip-matching", action="store_true", help="Skip matching jobs with CV using LLM")
     parser.add_argument("--groq-model", type=str, default="llama-3.1-8b-instant", help="Groq model to use for scoring")
     return parser.parse_args()
 
@@ -167,19 +166,60 @@ def main():
         print("=" * 60 + "\n")
         args.limit = 25
         
-    # Load CV text if we need to do matching
+    # 1. Resolve Output Path (Bug 1)
+    if not args.output:
+        user_output = input("Enter path to save the output JSON file (default: ./scraped_jobs.json): ").strip()
+        if not user_output:
+            args.output = os.path.abspath("scraped_jobs.json")
+        else:
+            args.output = os.path.abspath(user_output)
+    else:
+        args.output = os.path.abspath(args.output)
+
+    # 2. Resolve CV Path (Bug 2)
     cv_text = ""
-    if not args.skip_matching:
-        if os.path.exists(args.cv):
-            try:
-                from cv_matcher.pdf_parser import extract_text_from_pdf
-                print(f"\n[CV Matcher] Extracting text from CV: {args.cv}...")
-                cv_text = extract_text_from_pdf(args.cv)
-                print(f"[CV Matcher] Extracted {len(cv_text)} characters from CV.")
-            except Exception as e:
-                print(f"[Error] Failed to extract text from CV: {e}")
+    if not args.cv:
+        # Prompt user and wait until a valid CV path is provided
+        while True:
+            user_cv = input("Please enter the path to your CV PDF file (required): ").strip()
+            if not user_cv:
+                print("CV path cannot be empty. Please provide a path.")
+                continue
+            resolved_cv = os.path.abspath(user_cv)
+            if os.path.exists(resolved_cv) and os.path.isfile(resolved_cv):
+                args.cv = resolved_cv
+                break
+            else:
+                print(f"CV file not found at '{resolved_cv}'. Please enter a valid path.")
+    else:
+        # Verify if explicitly provided CV exists. If not, prompt and wait until a valid path is given
+        resolved_cv = os.path.abspath(args.cv)
+        if not (os.path.exists(resolved_cv) and os.path.isfile(resolved_cv)):
+            print(f"Specified CV file not found at '{resolved_cv}'.")
+            while True:
+                user_cv = input("Please enter the path to your CV PDF file (required): ").strip()
+                if not user_cv:
+                    print("CV path cannot be empty. Please provide a path.")
+                    continue
+                resolved_cv = os.path.abspath(user_cv)
+                if os.path.exists(resolved_cv) and os.path.isfile(resolved_cv):
+                    args.cv = resolved_cv
+                    break
+                else:
+                    print(f"CV file not found at '{resolved_cv}'. Please enter a valid path.")
+        else:
+            args.cv = resolved_cv
+
+    # Extract CV text (since we guaranteed the CV file exists and is valid)
+    try:
+        from cv_matcher.pdf_parser import extract_text_from_pdf
+        print(f"\n[CV Matcher] Extracting text from CV: {args.cv}...")
+        cv_text = extract_text_from_pdf(args.cv)
+        print(f"[CV Matcher] Extracted {len(cv_text)} characters from CV.")
+    except Exception as e:
+        print(f"[Error] Failed to extract text from CV: {e}")
     
-    # 1. Check if we should only run CV matching on existing scraped_jobs.json
+    # 3. Check if we should only run CV matching on existing scraped_jobs.json
     if args.match_only:
         print("=" * 60)
         print("Running CV Matching Mode Only")
@@ -187,7 +227,7 @@ def main():
         print(f"Jobs Source: {args.output}")
         print("=" * 60)
         
-        if not os.path.exists(args.cv):
+        if not args.cv or not os.path.exists(args.cv):
             print(f"[Error] CV file not found at '{args.cv}'. Please place your CV PDF in the root directory or specify its path with --cv.")
             return
         
@@ -320,40 +360,39 @@ def main():
     # Close database connection
     db.close()
 
-    # Match CV if not skipped
-    if not args.skip_matching:
-        if os.path.exists(args.cv):
-            try:
-                all_results, matched_results = run_cv_matching(
-                    cv_path=args.cv,
-                    jobs_json_path=args.output,
-                    model=args.groq_model
-                )
-                
-                # Print general/all scores
-                print("\n" + "=" * 60)
-                print("ALL JOB TITLES AND MATCH SCORES (0-10):")
-                print("=" * 60)
-                for res in all_results:
-                    print(f"- {res['title']} ({res['company']}) - Score: {res['score']}/10")
-                    print(f"  Explanation: {res['explanation']}")
-                
-                # Print match score > 6
-                print("\n" + "=" * 60)
-                print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED):")
-                print("=" * 60)
-                if not matched_results:
-                    print("No jobs with match score above 6.")
-                else:
-                    for res in matched_results:
-                        print(f"- {res['title']}")
-                print("=" * 60 + "\n")
-                
-            except Exception as e:
-                print(f"[Error] CV matching failed: {e}")
-        else:
-            print(f"\n[CV Matcher Info] CV file '{args.cv}' not found. Skipping CV matching.")
-            print("To run CV matching, please place your CV PDF file in the root folder (default name: cv.pdf) or specify the path via --cv.")
+    # Match CV
+    if os.path.exists(args.cv):
+        try:
+            all_results, matched_results = run_cv_matching(
+                cv_path=args.cv,
+                jobs_json_path=args.output,
+                model=args.groq_model
+            )
+            
+            # Print general/all scores
+            print("\n" + "=" * 60)
+            print("ALL JOB TITLES AND MATCH SCORES (0-10):")
+            print("=" * 60)
+            for res in all_results:
+                print(f"- {res['title']} ({res['company']}) - Score: {res['score']}/10")
+                print(f"  Explanation: {res['explanation']}")
+            
+            # Print match score > 6
+            print("\n" + "=" * 60)
+            print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED):")
+            print("=" * 60)
+            if not matched_results:
+                print("No jobs with match score above 6.")
+            else:
+                for res in matched_results:
+                    print(f"- {res['title']}")
+            print("=" * 60 + "\n")
+            
+        except Exception as e:
+            print(f"[Error] CV matching failed: {e}")
+    else:
+        print(f"\n[CV Matcher Info] CV file '{args.cv}' not found. Skipping CV matching.")
+        print("To run CV matching, please place your CV PDF file in the root folder (default name: cv.pdf) or specify the path via --cv.")
 
 if __name__ == "__main__":
     main()
