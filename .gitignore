@@ -31,6 +31,8 @@ dist/
 .vscode/
 .idea/
 .DS_Store
-test/
 resume.pdf
 cv.pdf
+
+# Generated outputs (tailored CV and cover letters)
+outputs/

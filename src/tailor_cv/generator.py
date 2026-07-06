@@ -91,7 +91,7 @@ def get_tailored_cv_data(client, cv_text, job_details) -> dict:
         "Authorization": f"Bearer {client.api_key}"
     }
     max_retries = 5
-    backoff = 4.0
+    backoff = 7.0
     for attempt in range(max_retries):
         try:
             response = requests.post(client.url, headers=headers, json=payload, timeout=45)
@@ -154,7 +154,7 @@ def get_tailored_cl_data(client, cv_text, job_details) -> dict:
         "Authorization": f"Bearer {client.api_key}"
     }
     max_retries = 5
-    backoff = 4.0
+    backoff = 7.0
     for attempt in range(max_retries):
         try:
             response = requests.post(client.url, headers=headers, json=payload, timeout=45)
@@ -531,6 +531,11 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         generate_pdf_cover_letter(cl_data, cl_pdf_path)
         generate_docx_cover_letter(cl_data, cl_docx_path)
         
-        print(f"  [Completed] Saved tailored CV and Cover Letter in: {target_dir}")
+        # Save job details as JSON in the same folder
+        job_json_path = os.path.join(target_dir, "job_details.json")
+        with open(job_json_path, 'w', encoding='utf-8') as jf:
+            json.dump(job, jf, indent=2, ensure_ascii=False)
+            
+        print(f"  [Completed] Saved tailored CV, Cover Letter, and Job Details in: {target_dir}")
     except Exception as e:
         print(f"  [Error] Failed to generate tailored documents for '{job.get('title')}' at '{job.get('company')}': {e}")
