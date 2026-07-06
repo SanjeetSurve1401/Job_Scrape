@@ -1,8 +1,8 @@
 import os
 import json
 from typing import List, Dict, Any, Tuple
-from cv_matcher.pdf_parser import extract_text_from_pdf
-from cv_matcher.groq_client import GroqClient
+from src.tailor_cv.pdf_parser import extract_text_from_pdf
+from src.tailor_cv.groq_client import GroqClient
 
 def run_cv_matching(
     cv_path: str,

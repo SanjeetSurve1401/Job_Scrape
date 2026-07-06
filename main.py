@@ -9,7 +9,7 @@ from src.interfaces import DatabaseInterface
 from src.verifier import JobVerifier
 from src.scrapers import get_scrapers
 from src.models import Job
-from cv_matcher.matcher import run_cv_matching
+from src.tailor_cv.matcher import run_cv_matching
 
 def parse_args():
     """Parses command-line arguments."""
@@ -68,7 +68,7 @@ def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs
     # Instantiate GroqClient if matching is requested
     client = None
     if cv_text:
-        from cv_matcher.groq_client import GroqClient
+        from src.tailor_cv.groq_client import GroqClient
         client = GroqClient(model=args.groq_model)
 
     from src.database import DatabaseHandler
@@ -156,6 +156,34 @@ def print_summary(total_scraped: int, verified_count: int, new_inserted: int, up
     print(f"  - Existing jobs updated/merged: {updated_count}")
     print("=" * 60)
 
+def generate_documents_for_all_jobs(args):
+    print("\n" + "=" * 60)
+    print("GENERATING TAILORED CV AND COVER LETTER FOR EACH JOB POSTING...")
+    print("=" * 60)
+    try:
+        from src.tailor_cv.generator import generate_tailored_documents
+        with open(args.output, 'r', encoding='utf-8') as f:
+            jobs_to_process = json.load(f)
+        
+        for idx, job in enumerate(jobs_to_process, 1):
+            title = job.get("title", "Unknown Title")
+            company = job.get("company", "Unknown Company")
+            print(f"[{idx}/{len(jobs_to_process)}] Processing documents for '{title}' at '{company}'...")
+            generate_tailored_documents(
+                cv_path=args.cv,
+                job=job,
+                model=args.groq_model,
+                output_base_dir=os.path.abspath("outputs")
+            )
+            if idx < len(jobs_to_process):
+                import time
+                time.sleep(10.0)
+        print("=" * 60)
+        print("Document generation complete.")
+        print("=" * 60 + "\n")
+    except Exception as e:
+        print(f"[Error] Failed to run document generation: {e}")
+
 def main():
     args = parse_args()
     
@@ -212,7 +240,7 @@ def main():
 
     # Extract CV text (since we guaranteed the CV file exists and is valid)
     try:
-        from cv_matcher.pdf_parser import extract_text_from_pdf
+        from src.tailor_cv.pdf_parser import extract_text_from_pdf
         print(f"\n[CV Matcher] Extracting text from CV: {args.cv}...")
         cv_text = extract_text_from_pdf(args.cv)
         print(f"[CV Matcher] Extracted {len(cv_text)} characters from CV.")
@@ -260,6 +288,8 @@ def main():
                 for res in matched_results:
                     print(f"- {res['title']}")
             print("=" * 60 + "\n")
+            
+            generate_documents_for_all_jobs(args)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")
@@ -387,6 +417,8 @@ def main():
                 for res in matched_results:
                     print(f"- {res['title']}")
             print("=" * 60 + "\n")
+            
+            generate_documents_for_all_jobs(args)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")
