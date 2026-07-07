@@ -175,6 +175,56 @@ def get_tailored_cl_data(client, cv_text, job_details) -> dict:
             else:
                 raise e
 
+
+def get_tailored_ats_score(client, cv_data: dict, job_details: dict) -> str:
+    cv_str = json.dumps(cv_data, indent=2, ensure_ascii=False)
+    job_info = f"Title: {job_details.get('title', 'N/A')}\nCompany: {job_details.get('company', 'N/A')}\nDescription: {job_details.get('about_job', 'N/A')}"
+    
+    system_prompt = (
+        "You are an ATS (Applicant Tracking System) scanner simulator.\n"
+        "Your task is to analyze the provided tailored CV against the job description and compute a realistic, objective ATS match score.\n"
+        "The match score must be an integer between 0 and 100 representing the match percentage.\n"
+        "Format the output as a valid JSON object with a single key 'ats_score' containing the integer (e.g., 92). Do not include any other text or markdown formatting."
+    )
+    user_content = f"Tailored CV:\n{cv_str}\n\nJob details:\n{job_info}"
+    payload = {
+        "model": client.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.1
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {client.api_key}"
+    }
+    
+    max_retries = 5
+    backoff = 7.0
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(client.url, headers=headers, json=payload, timeout=45)
+            if response.status_code == 429:
+                if attempt < max_retries - 1:
+                    print(f"    [Rate Limit] Hit 429 (Too Many Requests). Retrying in {backoff}s...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+            response.raise_for_status()
+            res_json = response.json()
+            data = json.loads(res_json['choices'][0]['message']['content'].strip())
+            score_val = data.get("ats_score", 0)
+            return f"{score_val}%"
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"    [Warning] Request failed: {e}. Retrying in {backoff}s...")
+                time.sleep(backoff)
+                backoff *= 2
+            else:
+                return "0%"
+
 def generate_pdf_cv(cv_data: dict, output_path: str):
     doc = SimpleDocTemplate(output_path, pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
     story = []
@@ -531,11 +581,18 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         generate_pdf_cover_letter(cl_data, cl_pdf_path)
         generate_docx_cover_letter(cl_data, cl_docx_path)
         
+        # Get tailored ATS score
+        print(f"  [ATS Scanner] Simulating ATS match score for tailored CV...")
+        ats_score = get_tailored_ats_score(client, cv_data, job)
+        job["ats_score"] = ats_score
+        
         # Save job details as JSON in the same folder
         job_json_path = os.path.join(target_dir, "job_details.json")
         with open(job_json_path, 'w', encoding='utf-8') as jf:
             json.dump(job, jf, indent=2, ensure_ascii=False)
             
-        print(f"  [Completed] Saved tailored CV, Cover Letter, and Job Details in: {target_dir}")
+        print(f"  [Completed] Saved tailored CV, Cover Letter, and Job Details in: {target_dir} (ATS Score: {ats_score})")
+        return ats_score
     except Exception as e:
         print(f"  [Error] Failed to generate tailored documents for '{job.get('title')}' at '{job.get('company')}': {e}")
+        return None

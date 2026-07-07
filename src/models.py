@@ -18,6 +18,7 @@ class Job:
     job_id: Optional[str] = None
     score: Optional[int] = None
     explanation: Optional[str] = None
+    ats_score: Optional[str] = None
 
     def dedup_key(self) -> str:
         """
@@ -42,5 +43,6 @@ class Job:
             "job_id": self.job_id,
             "dedup_key": self.dedup_key(),
             "score": self.score,
-            "explanation": self.explanation
+            "explanation": self.explanation,
+            "ats_score": self.ats_score
         }

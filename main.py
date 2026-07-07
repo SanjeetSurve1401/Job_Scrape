@@ -18,6 +18,7 @@ def parse_args():
     parser.add_argument("--location", type=str, default="Pune", help="Location to search for")
     parser.add_argument("--experience", type=str, default="1-3 years", help="Required experience level (e.g., '1-3 years', 'Entry Level')")
     parser.add_argument("--output", type=str, default=None, help="Path to save the JSON output file")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directory to save all outputs")
     parser.add_argument("--limit", type=int, default=15, help="Total max jobs to scrape across all sources (default: 15)")
     parser.add_argument("--cv", type=str, default=None, help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
@@ -107,7 +108,7 @@ def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs
             # MongoDB Mode: only save if score > 6 (or if matching was skipped)
             # Local Fallback Mode: always save to database so it ends up in the JSON output file
             should_save = True
-            if is_mongodb and cv_text and score is not None and score <= 6:
+            if is_mongodb and cv_text and score is not None and score < 6:
                 should_save = False
 
             try:
@@ -156,7 +157,7 @@ def print_summary(total_scraped: int, verified_count: int, new_inserted: int, up
     print(f"  - Existing jobs updated/merged: {updated_count}")
     print("=" * 60)
 
-def generate_documents_for_all_jobs(args):
+def generate_documents_for_all_jobs(args, outputs_dir):
     print("\n" + "=" * 60)
     print("GENERATING TAILORED CV AND COVER LETTER FOR EACH JOB POSTING...")
     print("=" * 60)
@@ -165,26 +166,52 @@ def generate_documents_for_all_jobs(args):
         with open(args.output, 'r', encoding='utf-8') as f:
             jobs_to_process = json.load(f)
         
+        updated_jobs = []
         for idx, job in enumerate(jobs_to_process, 1):
             title = job.get("title", "Unknown Title")
             company = job.get("company", "Unknown Company")
             print(f"[{idx}/{len(jobs_to_process)}] Processing documents for '{title}' at '{company}'...")
-            generate_tailored_documents(
+            ats_score = generate_tailored_documents(
                 cv_path=args.cv,
                 job=job,
                 model=args.groq_model,
-                output_base_dir=os.path.abspath("outputs")
+                output_base_dir=outputs_dir
             )
+            if ats_score:
+                job["ats_score"] = ats_score
+            updated_jobs.append(job)
+            
             if idx < len(jobs_to_process):
                 import time
                 time.sleep(10.0)
+                
+        # Write updated jobs back to the local database file
+        with open(args.output, 'w', encoding='utf-8') as f:
+            json.dump(updated_jobs, f, indent=2, ensure_ascii=False)
+            
         print("=" * 60)
-        print("Document generation complete.")
+        print("Document generation complete and updated main JSON database.")
         print("=" * 60 + "\n")
     except Exception as e:
         print(f"[Error] Failed to run document generation: {e}")
 
 def main():
+    # Verify environment variables
+    from src.config import Config
+    
+    # 1. Check Groq API
+    if not Config.GROQ_API or not Config.GROQ_API.strip():
+        print("[ERROR] GROQ_API is not set in the .env file. Execution stopped.")
+        return
+        
+    # 2. Check Glassdoor Credentials
+    if not Config.GLASSDOOR_COOKIE or not Config.GLASSDOOR_COOKIE.strip():
+        print("[ERROR] GLASSDOOR_COOKIE is not set in the .env file. Execution stopped.")
+        return
+    if not Config.GLASSDOOR_USER_AGENT or not Config.GLASSDOOR_USER_AGENT.strip():
+        print("[ERROR] GLASSDOOR_USER_AGENT is not set in the .env file. Execution stopped.")
+        return
+
     args = parse_args()
     
     # Restrict limit to 25 and warn if it is higher
@@ -194,15 +221,43 @@ def main():
         print("=" * 60 + "\n")
         args.limit = 25
         
+    # Resolve outputs folder dynamically from execution directory (CWD)
+    outputs_dir = None
+    if not args.output_dir:
+        try:
+            user_outputs_dir = input("Enter directory path to save all outputs (default: ./outputs): ").strip()
+            if not user_outputs_dir:
+                outputs_dir = os.path.abspath("outputs")
+            else:
+                outputs_dir = os.path.abspath(user_outputs_dir)
+        except EOFError:
+            outputs_dir = os.path.abspath("outputs")
+    else:
+        outputs_dir = os.path.abspath(args.output_dir)
+    os.makedirs(outputs_dir, exist_ok=True)
+
     # 1. Resolve Output Path (Bug 1)
     if not args.output:
-        user_output = input("Enter path to save the output JSON file (default: ./scraped_jobs.json): ").strip()
-        if not user_output:
-            args.output = os.path.abspath("scraped_jobs.json")
-        else:
-            args.output = os.path.abspath(user_output)
+        default_output_path = os.path.join(outputs_dir, "scraped_jobs.json")
+        try:
+            user_output = input(f"Enter path to save the output JSON file (default: {default_output_path}): ").strip()
+            if not user_output:
+                args.output = default_output_path
+            else:
+                if not os.path.dirname(user_output):
+                    args.output = os.path.join(outputs_dir, user_output)
+                else:
+                    args.output = os.path.abspath(user_output)
+        except EOFError:
+            args.output = default_output_path
     else:
-        args.output = os.path.abspath(args.output)
+        if not os.path.dirname(args.output):
+            args.output = os.path.join(outputs_dir, args.output)
+        else:
+            args.output = os.path.abspath(args.output)
+    
+    # Ensure parent directory of output JSON exists
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     # 2. Resolve CV Path (Bug 2)
     cv_text = ""
@@ -289,7 +344,7 @@ def main():
                     print(f"- {res['title']}")
             print("=" * 60 + "\n")
             
-            generate_documents_for_all_jobs(args)
+            generate_documents_for_all_jobs(args, outputs_dir)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")
@@ -321,7 +376,7 @@ def main():
     
     if db is None:
         print("Falling back to local in-memory storage (results will be verified, deduplicated, and saved to the JSON output file).")
-        db = LocalDatabaseHandler()
+        db = LocalDatabaseHandler(filename=args.output)
 
     # Instantiate verifier
     verifier = JobVerifier()
@@ -418,7 +473,7 @@ def main():
                     print(f"- {res['title']}")
             print("=" * 60 + "\n")
             
-            generate_documents_for_all_jobs(args)
+            generate_documents_for_all_jobs(args, outputs_dir)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")

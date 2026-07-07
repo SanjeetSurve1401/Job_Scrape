@@ -1,11 +1,7 @@
-# Job Scraper Engine — Multi-Tool AI Skill & CLI
+# Job Scraper Engine — CLI
 
-**A modular, highly resilient, and parallelized Job Scraper packaged as an AI Skill compatible with Cursor, Claude Code, Aider, Windsurf, Copilot, Antigravity, Mistral Vibe, and Hermes Agent.**
+This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed** concurrently in parallel, verifies them using regex filters, merges duplicates, scores matching inline against a CV using Groq (LLM), and stores matches in MongoDB Atlas or falls back to a persistent local SQLite database file (.db) in the outputs directory.
 
-This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed** concurrently in parallel, verifies them using regex filters, merges duplicates, scores matching inline against a CV using Groq (LLM), and stores matches in MongoDB Atlas or falls back to a persistent local JSON database.
-
-[![AI Skill](https://img.shields.io/badge/AI%20Skill-job--scraper-brightgreen?style=for-the-badge)](#ai-skill-integration)
-[![Compatibility](https://img.shields.io/badge/AIs-8%20Tools-blue?style=for-the-badge)](#multi-tool-compatibility)
 [![Database](https://img.shields.io/badge/Database-MongoDB%20%2F%20Local-orange?style=for-the-badge)](#database--local-fallback-modes)
 
 ---
@@ -20,43 +16,16 @@ This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed*
   - Automatically queries the database using `find_job_by_key` to retrieve cached scores and skip redundant API calls.
   - Implements a rate-limit safe `2.0` seconds delay between Groq calls.
 - **MongoDB Score Threshold Filtering**: If MongoDB is connected, jobs are stored in the cloud database **only if** their match score is greater than 6 (score 6+).
-- **Persistent Local Fallback Database**: If MongoDB is disconnected, it falls back to a persistent local JSON database (specified by `--output`) which loads existing jobs at startup and merges new listings.
+- **Persistent Local Fallback Database**: If MongoDB is disconnected, it falls back to a persistent local SQLite database file `.db` (inside the outputs folder) which loads existing jobs at startup, merges new listings, and exports results to JSON at the end of the run.
 
 ---
 
-## What is the Job Scraper AI Skill?
+## Mode Comparison
 
-The **Job Scraper AI Skill** is a packaged bundle of instructions, schemas, and automation scripts. It gives AI coding assistants native domain expertise to run job scraping operations, parse parameters, and query or format listings directly inside their workflows.
-
-### Mode Comparison
-
-| Mode | Database Connection | Hosting / Deployment | AI Output Format | Best For |
+| Mode | Database Connection | Hosting / Deployment | Output Format | Best For |
 |---|---|---|---|---|
 | **MongoDB Mode** | MongoDB Atlas (via `.env`) | Cloud Database (only saves jobs with Score > 6) | JSON file in current directory | Long-term tracking, web portals, storing only top matches |
-| **Local Fallback Mode** | None (Local JSON File) | **No deployment required** (saves all jobs) | JSON file in current directory | Quick local queries, offline audits, persistent local database |
-
----
-
-## Multi-Tool Compatibility
-
-This skill is compatible with **8 major AI coding assistants and agents**. You can generate native configurations for all platforms by running the export script:
-
-```bash
-python3.11 scripts/export_rules.py
-```
-
-This creates the following native files automatically:
-
-| AI Tool / Agent | Target Format | Configuration File Generated |
-| :--- | :--- | :--- |
-| **Google Antigravity** | `SKILL.md` (Manifest) | [SKILL.md](file:/Jobs_scrapper/Job_Scrape/SKILL.md) (Root) |
-| **Cursor** | `.cursorrules` (System Prompt) | `.cursorrules` (Root) |
-| **Aider** | `CONVENTIONS.md` (System Rules) | `CONVENTIONS.md` (Root) |
-| **Windsurf** | `.windsurf/rules` | `.windsurf/rules/job-scraper.md` |
-| **GitHub Copilot** | `.github/copilot-instructions.md` | `.github/copilot-instructions.md` |
-| **Mistral Vibe** | `.vibe/skills/` | `.vibe/skills/job-scraper/SKILL.md` |
-| **Hermes Agent** | `.hermes/skills/` | `.hermes/skills/job-scraper/SKILL.md` |
-| **Claude Code** | Custom Skill folder | Copies of `SKILL.md` inside target agent directories |
+| **Local Fallback Mode** | SQLite Database (.db File) | **No deployment required** (saves all jobs) | SQLite .db file and JSON in outputs folder | Quick local queries, offline audits, persistent local database |
 
 ---
 
@@ -68,16 +37,11 @@ Job_Scrape/
 ├── .gitignore                  
 ├── requirements.txt            
 ├── main.py                     # Main CLI Orchestrator (scrapes, verifies, scores inline, exports)
-├── SKILL.md                    # Core AI Skill Manifest
-├── .cursorrules                # Cursor System Rules
-├── CONVENTIONS.md              # Aider System Rules
 ├── glassdoor_search.html       # Local offline Glassdoor cache
-├── scripts/
-│   └── export_rules.py         # Automates exporting skill specs to 8 AI platforms
 └── src/
     ├── __init__.py
     ├── config.py               # Config loader from .env
-    ├── database.py             # MongoDB Handler + Persistent Local JSON Handler
+    ├── database.py             # MongoDB Handler + Persistent Local SQLite Handler
     ├── interfaces.py           # Database and Verifier interfaces (DIP)
     ├── models.py               # Job data model & SHA256 dedup hashing
     ├── verifier.py             # Regex job role, location, and experience verifier
@@ -122,7 +86,7 @@ python3.11 main.py --role "<Job Role>" --location "<Location>" --experience "<Ex
 
 ---
 
-## AI Skill Parameter Specifications
+## CLI Parameter Specifications
 
 | Parameter Name | Argument Flag | Data Type | Default Value | Description / Validation Rules | Example Values |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -144,26 +108,4 @@ python3.11 main.py --role "Software Engineer" --location "Pune" --experience "1-
 
 The engine leverages **Constructor-based Dependency Injection** to dynamically select the storage layer:
 1. **MongoDB Mode**: Connections are managed in `DatabaseHandler`. It utilizes a unique index on `dedup_key` to merge postings, but **only saves jobs with a CV match score > 6** to ensure the cloud database only stores relevant matches.
-2. **Local Fallback Mode**: If MongoDB is offline or unreachable, `LocalDatabaseHandler` loads existing jobs from the output JSON file at startup, merges/deduplicates new postings, and writes the complete history back to the output JSON file. **No server setup or database installation is required.**
-
----
-
-## Loading the Skill in AI Agents
-
-### Google Antigravity Configuration
-Add the project directory to the `skills_paths` config:
-```python
-from google.antigravity import Agent, LocalAgentConfig
-
-config = LocalAgentConfig(
-    skills_paths=["/Users/pc_name/Documents/Jobs_scrapper/Job_Scrape"]
-)
-
-async with Agent(config) as agent:
-    response = await agent.chat("Find me software engineer jobs in Remote with 1-3 years experience")
-    print(await response.text())
-```
-
-### Cursor & Windsurf Instructions
-Since `export_rules.py` generates `.cursorrules` and `.windsurf/rules/job-scraper.md`, the AI assistant in Cursor or Windsurf will automatically read the instructions when you open this project workspace. Simply ask:
-> *"Run the job scraper for Python Developers in Pune requiring 3-5 years experience with a limit of 10."*
+2. **Local Fallback Mode**: If MongoDB is offline or unreachable, `LocalDatabaseHandler` connects to a SQLite database file `.db` inside the outputs directory, merges/deduplicates new postings, and writes them directly, then exports them back to the output JSON file at the end of the run. **No server setup or database installation is required.**
