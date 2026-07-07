@@ -557,7 +557,7 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         from src.tailor_cv.groq_client import GroqClient
         client = GroqClient(model=model)
         
-        print(f"  [Tailoring CV] Calling LLM for '{job.get('title')}' at '{job.get('company')}'...")
+        print(f"  \n[Tailoring CV] Calling LLM for '{job.get('title')}' at '{job.get('company')}'...\n")
         cv_data = get_tailored_cv_data(client, cv_text, job)
         
         time.sleep(3.0)
@@ -582,7 +582,7 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         generate_docx_cover_letter(cl_data, cl_docx_path)
         
         # Get tailored ATS score
-        print(f"  [ATS Scanner] Simulating ATS match score for tailored CV...")
+        print(f"  \n[ATS Scanner] Simulating ATS match score for tailored CV...\n")
         ats_score = get_tailored_ats_score(client, cv_data, job)
         job["ats_score"] = ats_score
         
@@ -591,7 +591,7 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         with open(job_json_path, 'w', encoding='utf-8') as jf:
             json.dump(job, jf, indent=2, ensure_ascii=False)
             
-        print(f"  [Completed] Saved tailored CV, Cover Letter, and Job Details in: {target_dir} (ATS Score: {ats_score})")
+        print(f"  \n[Completed] Saved tailored CV, Cover Letter, and Job Details in: {target_dir} (ATS Score: {ats_score})\n")
         return ats_score
     except Exception as e:
         print(f"  [Error] Failed to generate tailored documents for '{job.get('title')}' at '{job.get('company')}': {e}")
