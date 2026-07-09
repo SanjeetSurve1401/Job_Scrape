@@ -19,6 +19,7 @@ except ImportError:
 from src.scrapers.base import BaseScraper
 from src.scrapers import register_scraper
 from src.models import Job
+from src.config import Config
 
 @register_scraper
 class IndeedScraper(BaseScraper):
@@ -36,14 +37,22 @@ class IndeedScraper(BaseScraper):
     def __init__(self):
         # We will use cffi_requests.Session if HAS_CURL_CFFI is True
         self.session = cffi_requests.Session()
+        user_agent = getattr(Config, "INDEED_USER_AGENT", None)
+        if not user_agent or not user_agent.strip():
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0"
+            
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+            "User-Agent": user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
             "Referer": "https://www.google.com/",
             "DNT": "1"
         }
         self.session.headers.update(self.headers)
+        
+        cookie = getattr(Config, "INDEED_COOKIE", None)
+        if cookie:
+            self.session.headers.update({"Cookie": cookie})
 
     def fetch_job_description(self, jk: str, base_url: str) -> str:
         """Fetches the job details page for a specific Indeed job key."""
@@ -140,7 +149,9 @@ class IndeedScraper(BaseScraper):
         """Scrapes Indeed jobs matching the role and location."""
         print(f"Running Indeed Scraper for Role: '{role}', Location: '{location}'")
         
-        if HAS_JOBSPY:
+        # If we do not have cookies, try jobspy first. If we have cookies, use manual scraper with session cookies.
+        use_jobspy = HAS_JOBSPY and not getattr(Config, "INDEED_COOKIE", None)
+        if use_jobspy:
             jobs = self._scrape_via_jobspy(role, location, limit)
             if jobs:
                 return jobs

@@ -23,6 +23,7 @@ def parse_args():
     parser.add_argument("--cv", type=str, default=None, help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
     parser.add_argument("--groq-model", type=str, default="llama-3.1-8b-instant", help="Groq model to use for scoring")
+    parser.add_argument("--sources", type=str, default="linkedin,glassdoor,indeed", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor,indeed')")
     return parser.parse_args()
 
 def execute_scraping(scrapers: list, args, limit: int) -> List[Job]:
@@ -203,15 +204,6 @@ def main():
     if not Config.GROQ_API or not Config.GROQ_API.strip():
         print("[ERROR] GROQ_API is not set in the .env file. Execution stopped.")
         return
-        
-    # 2. Check Glassdoor Credentials
-    if not Config.GLASSDOOR_COOKIE or not Config.GLASSDOOR_COOKIE.strip():
-        print("[ERROR] GLASSDOOR_COOKIE is not set in the .env file. Execution stopped.")
-        return
-    if not Config.GLASSDOOR_USER_AGENT or not Config.GLASSDOOR_USER_AGENT.strip():
-        print("[ERROR] GLASSDOOR_USER_AGENT is not set in the .env file. Execution stopped.")
-        return
-
     args = parse_args()
     
     # Restrict limit to 25 and warn if it is higher
@@ -381,8 +373,44 @@ def main():
     # Instantiate verifier
     verifier = JobVerifier()
     
-    # Dynamically discover scrapers (OCP)
-    scraper_classes = get_scrapers()
+    # Dynamically discover scrapers (OCP) and filter based on user selection
+    selected_sources = [s.strip().lower() for s in args.sources.split(",")]
+    scraper_classes = [
+        cls for cls in get_scrapers()
+        if cls.__name__.lower().replace("scraper", "") in selected_sources
+    ]
+    
+    # Check if LinkedInScraper is being run, and if so, check login
+    has_linkedin = any(cls.__name__ == "LinkedInScraper" for cls in scraper_classes)
+    if has_linkedin:
+        try:
+            from linkedin_login import check_and_login
+            check_and_login()
+        except Exception as e:
+            print(f"[Warning] LinkedIn login helper failed to run: {e}")
+            
+    # Check if GlassdoorScraper is being run, and if so, check login
+    has_glassdoor = any(cls.__name__ == "GlassdoorScraper" for cls in scraper_classes)
+    if has_glassdoor:
+        try:
+            from glassdoor_login import check_and_login_glassdoor
+            check_and_login_glassdoor()
+        except Exception as e:
+            print(f"[Warning] Glassdoor login helper failed to run: {e}")
+            
+        # Verify Glassdoor credentials
+        if not Config.GLASSDOOR_COOKIE or not Config.GLASSDOOR_COOKIE.strip() or not Config.GLASSDOOR_USER_AGENT or not Config.GLASSDOOR_USER_AGENT.strip():
+            print("[ERROR] GLASSDOOR_COOKIE or GLASSDOOR_USER_AGENT is not set in .env. Glassdoor execution stopped.")
+            return
+
+    # Check if IndeedScraper is being run, and if so, check login
+    has_indeed = any(cls.__name__ == "IndeedScraper" for cls in scraper_classes)
+    if has_indeed:
+        try:
+            from indeed_login import check_and_login_indeed
+            check_and_login_indeed()
+        except Exception as e:
+            print(f"[Warning] Indeed login helper failed to run: {e}")
     
     verified_jobs_dict = {}
     total_raw_scraped = 0

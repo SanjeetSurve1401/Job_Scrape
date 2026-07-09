@@ -36,3 +36,7 @@ cv.pdf
 
 # Generated outputs (tailored CV and cover letters)
 outputs/
+
+# Playwright session browser profiles / cache
+playwright_linkedin_session/
+playwright_glassdoor_session/
