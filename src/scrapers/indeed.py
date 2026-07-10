@@ -1,11 +1,13 @@
 import os
 import time
 import re
+import json
 import urllib.parse
 from typing import List
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
+from src.config import Config
 from src.scrapers.base import BaseScraper
 from src.scrapers import register_scraper
 from src.models import Job
@@ -17,37 +19,50 @@ class IndeedScraper(BaseScraper):
     def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
         print(f"\n[Indeed] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
         scraped_jobs = []
-        user_data_dir = os.path.abspath("./playwright_indeed_session")
         
-        if not os.path.exists(user_data_dir):
-            print("[Indeed ERROR] Persistent session directory does not exist! Run indeed_login.py first.")
-            return []
+        # Load storage state from Config
+        storage_state = None
+        if Config.INDEED_STORAGE_STATE and Config.INDEED_STORAGE_STATE.strip():
+            try:
+                storage_state = json.loads(Config.INDEED_STORAGE_STATE)
+                print("[Indeed] Loaded storage state from .env settings.")
+            except Exception as e:
+                print(f"[Indeed Warning] Failed to parse INDEED_STORAGE_STATE JSON: {e}")
 
         # Determine domain (Indeed India vs Global)
         loc_lower = location.lower()
         base_url = "https://in.indeed.com" if any(region in loc_lower for region in self.INDIAN_REGIONS) else "https://www.indeed.com"
         
+        user_data_dir = os.path.abspath("./playwright_indeed_session")
+        
         with sync_playwright() as p:
+            browser = None
+            context = None
+            
             try:
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    headless=True,
-                    channel="chrome",
-                    args=["--disable-blink-features=AutomationControlled"],
-                    ignore_default_args=["--enable-automation"]
-                )
-            except Exception as e:
-                print(f"[Indeed] Failed to launch with Chrome channel ({e}). Trying default chromium...")
-                try:
+                if storage_state:
+                    # Use storage state in a clean browser session
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        storage_state=storage_state,
+                        user_agent=Config.INDEED_USER_AGENT
+                    )
+                else:
+                    # Fallback to persistent context folder
+                    if not os.path.exists(user_data_dir):
+                        print("[Indeed ERROR] No storage state in .env or session directory found! Run indeed_login.py first.")
+                        return []
+                    print("[Indeed] Using persistent session directory.")
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=user_data_dir,
                         headless=True,
+                        channel="chrome",
                         args=["--disable-blink-features=AutomationControlled"],
                         ignore_default_args=["--enable-automation"]
                     )
-                except Exception as e2:
-                    print(f"[Indeed ERROR] Could not launch Playwright browser context: {e2}")
-                    return []
+            except Exception as e:
+                print(f"[Indeed ERROR] Could not launch Playwright browser context: {e}")
+                return []
             
             page = context.pages[0] if context.pages else context.new_page()
             
@@ -63,7 +78,10 @@ class IndeedScraper(BaseScraper):
                 # Check for login redirection
                 if "signin" in page.url:
                     print("[Indeed ERROR] Session expired or not logged in! Run indeed_login.py to update session.")
-                    context.close()
+                    if browser:
+                        browser.close()
+                    else:
+                        context.close()
                     return []
                 
                 # Wait for job list elements
@@ -84,16 +102,13 @@ class IndeedScraper(BaseScraper):
                     break
                     
                 try:
-                    # Look for title, company, jk
                     title_elem = card.select_one("h2.jobTitle, a.jcs-JobTitle")
                     if not title_elem:
                         continue
                         
                     title = title_elem.get_text().strip()
                     
-                    # Extract job key (jk)
                     jk = ""
-                    # Check in title / link attributes
                     link_elem = card.select_one("a.jcs-JobTitle, a[data-jk]")
                     if link_elem and link_elem.has_attr("data-jk"):
                         jk = link_elem["data-jk"]
@@ -103,7 +118,6 @@ class IndeedScraper(BaseScraper):
                             jk = match.group(1)
                             
                     if not jk:
-                        # Try parsing from card outer structure
                         outer_a = card.find_parent("a", href=True)
                         if outer_a:
                             match = re.search(r"jk=([a-f0-9]+)", outer_a["href"])
@@ -113,11 +127,9 @@ class IndeedScraper(BaseScraper):
                     if not jk:
                         continue
                         
-                    # Company
                     company_elem = card.select_one("[data-testid='company-name'], .companyName, .company_name")
                     company = company_elem.get_text().strip() if company_elem else ""
                     
-                    # Location
                     loc_elem = card.select_one("[data-testid='text-location'], .companyLocation, .location")
                     loc_name = loc_elem.get_text().strip() if loc_elem else location
                     
@@ -129,7 +141,6 @@ class IndeedScraper(BaseScraper):
                     if any(x["jk"] == jk for x in parsed_jobs_info):
                         continue
                         
-                    # Extract salary if present on search result
                     salary = None
                     salary_elem = card.select_one(".salary-snippet-container, .metadata.salary-snippet-container, .salary-snippet")
                     if salary_elem:
@@ -194,7 +205,10 @@ class IndeedScraper(BaseScraper):
                     )
                     scraped_jobs.append(job_obj)
             
-            context.close()
+            if browser:
+                browser.close()
+            else:
+                context.close()
             
         print(f"[Indeed] Completed. Scraped {len(scraped_jobs)} jobs.")
         return scraped_jobs

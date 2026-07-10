@@ -2,6 +2,7 @@ import os
 import time
 import sys
 import shutil
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -41,7 +42,6 @@ def run_playwright_login():
             from playwright.sync_api import sync_playwright
         except Exception as e:
             print(f"[ERROR] Playwright install failed: {e}")
-            print("Please try manual login or install playwright manually.")
             return None
 
     print("\nOpening Real Chrome browser for Glassdoor login. Please log in manually...")
@@ -49,6 +49,12 @@ def run_playwright_login():
         with sync_playwright() as p:
             user_data_dir = os.path.abspath("./playwright_glassdoor_session")
             
+            if os.path.exists(user_data_dir):
+                try:
+                    shutil.rmtree(user_data_dir)
+                except Exception:
+                    pass
+                    
             try:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
@@ -68,7 +74,6 @@ def run_playwright_login():
                 
             page = context.pages[0] if context.pages else context.new_page()
             
-            # Fetch user agent immediately to avoid navigation context destruction issues
             try:
                 user_agent = page.evaluate("navigator.userAgent")
             except Exception:
@@ -79,10 +84,8 @@ def run_playwright_login():
             print("Waiting for login... (Complete login in the browser window)")
             
             detected = False
-            for _ in range(150): # 5 minutes max
+            for _ in range(150):
                 cookies = context.cookies()
-                
-                # Check for the auth token cookie 'at'
                 has_auth_token = any(c['name'] == 'at' for c in cookies)
                 
                 if has_auth_token:
@@ -94,8 +97,13 @@ def run_playwright_login():
             if detected:
                 cookies = context.cookies()
                 cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+                
+                # Extract full storage state
+                storage_state = context.storage_state()
+                storage_state_str = json.dumps(storage_state)
+                
                 context.close()
-                return cookie_str, user_agent
+                return cookie_str, user_agent, storage_state_str
             else:
                 print("[ERROR] Login timeout or session cookies not found.")
                 context.close()
@@ -105,65 +113,35 @@ def run_playwright_login():
         return None
 
 def check_and_login_glassdoor():
+    glassdoor_storage = os.getenv("GLASSDOOR_STORAGE_STATE")
     glassdoor_cookie = os.getenv("GLASSDOOR_COOKIE")
     glassdoor_ua = os.getenv("GLASSDOOR_USER_AGENT")
     
-    force_login = False
-    if glassdoor_cookie and glassdoor_cookie.strip() and glassdoor_ua and glassdoor_ua.strip():
+    if glassdoor_storage and glassdoor_storage.strip() and glassdoor_cookie and glassdoor_cookie.strip():
         print("\nGlassdoor session credentials already exist in .env.")
-        print("1. Use existing session (Default)")
-        print("2. Login again / Update session credentials")
-        try:
-            choice = input("Option select kara (1/2, default 1): ").strip()
-        except EOFError:
-            choice = "1"
-        if choice == "2":
-            force_login = True
-            # Clear Playwright session directories to wipe old cookies/cache
-            session_dir = os.path.abspath("./playwright_glassdoor_session")
-            if os.path.exists(session_dir):
-                print("[INFO] Clearing old browser session data...")
-                try:
-                    shutil.rmtree(session_dir)
-                except Exception as e:
-                    print(f"[Warning] Could not clear old session directory: {e}")
-        else:
-            return True
+        return True
 
     print("\n" + "="*50)
-    print("GLASSDOOR LOGIN & SESSION REQUIRED")
+    print("GLASSDOOR LOGIN & SESSION REQUIRED (AUTO-FLOW)")
     print("="*50)
-    print("[INFO] Playwright Auto-Login start hot aahe (Real Chrome open karel)...")
+    print("[INFO] Starting Playwright login browser automatically...")
     
-    cookie_str = None
-    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    
-    # If starting a fresh Playwright run, make sure old session is wiped if force_login was selected
-    if not force_login:
-        # Wipe session directory to avoid false detection of old session
-        session_dir = os.path.abspath("./playwright_glassdoor_session")
-        if os.path.exists(session_dir):
-            try:
-                shutil.rmtree(session_dir)
-            except Exception:
-                pass
-
     res = run_playwright_login()
     if res:
-        cookie_str, user_agent = res
-            
-    if cookie_str and user_agent:
+        cookie_str, user_agent, storage_state_str = res
         update_env_file("GLASSDOOR_COOKIE", f"'{cookie_str}'")
         update_env_file("GLASSDOOR_USER_AGENT", f"'{user_agent}'")
-        print("\n[SUCCESS] Glassdoor session .env madhe save zali aahe!")
-            
+        update_env_file("GLASSDOOR_STORAGE_STATE", f"'{storage_state_str}'")
+        
+        print("\n[SUCCESS] Glassdoor session and full storage state saved to .env!")
         load_dotenv(override=True)
         from src.config import Config
         Config.GLASSDOOR_COOKIE = os.getenv("GLASSDOOR_COOKIE")
         Config.GLASSDOOR_USER_AGENT = os.getenv("GLASSDOOR_USER_AGENT")
+        Config.GLASSDOOR_STORAGE_STATE = os.getenv("GLASSDOOR_STORAGE_STATE")
         return True
     else:
-        print("[WARNING] Credentials empty ahet. Scraping check fail hoil.")
+        print("[WARNING] Glassdoor credentials save failed.")
         return False
 
 if __name__ == "__main__":

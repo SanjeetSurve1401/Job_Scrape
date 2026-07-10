@@ -7,6 +7,7 @@ from typing import Optional, List, Any
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
+from src.config import Config
 from src.scrapers.base import BaseScraper
 from src.scrapers import register_scraper
 from src.models import Job
@@ -168,33 +169,46 @@ class GlassdoorScraper(BaseScraper):
     def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
         print(f"\n[Glassdoor] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
         scraped_jobs = []
+        
+        # Load storage state from Config
+        storage_state = None
+        if Config.GLASSDOOR_STORAGE_STATE and Config.GLASSDOOR_STORAGE_STATE.strip():
+            try:
+                storage_state = json.loads(Config.GLASSDOOR_STORAGE_STATE)
+                print("[Glassdoor] Loaded storage state from .env settings.")
+            except Exception as e:
+                print(f"[Glassdoor Warning] Failed to parse GLASSDOOR_STORAGE_STATE JSON: {e}")
+                
         user_data_dir = os.path.abspath("./playwright_glassdoor_session")
         
-        if not os.path.exists(user_data_dir):
-            print("[Glassdoor ERROR] Persistent session directory does not exist! Run glassdoor_login.py first.")
-            return []
-            
         with sync_playwright() as p:
+            browser = None
+            context = None
+            
             try:
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    headless=True,
-                    channel="chrome",
-                    args=["--disable-blink-features=AutomationControlled"],
-                    ignore_default_args=["--enable-automation"]
-                )
-            except Exception as e:
-                print(f"[Glassdoor] Failed to launch with Chrome channel ({e}). Trying default chromium...")
-                try:
+                if storage_state:
+                    # Use storage state in a clean browser session
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        storage_state=storage_state,
+                        user_agent=Config.GLASSDOOR_USER_AGENT
+                    )
+                else:
+                    # Fallback to persistent context folder
+                    if not os.path.exists(user_data_dir):
+                        print("[Glassdoor ERROR] No storage state in .env or session directory found! Run glassdoor_login.py first.")
+                        return []
+                    print("[Glassdoor] Using persistent session directory.")
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=user_data_dir,
                         headless=True,
+                        channel="chrome",
                         args=["--disable-blink-features=AutomationControlled"],
                         ignore_default_args=["--enable-automation"]
                     )
-                except Exception as e2:
-                    print(f"[Glassdoor ERROR] Could not launch Playwright browser context: {e2}")
-                    return []
+            except Exception as e:
+                print(f"[Glassdoor ERROR] Could not launch Playwright browser context: {e}")
+                return []
             
             page = context.pages[0] if context.pages else context.new_page()
             
@@ -210,7 +224,10 @@ class GlassdoorScraper(BaseScraper):
                 # Check for login redirection
                 if "member/profile" in page.url:
                     print("[Glassdoor ERROR] Session expired or not logged in! Run glassdoor_login.py to update session.")
-                    context.close()
+                    if browser:
+                        browser.close()
+                    else:
+                        context.close()
                     return []
                 
                 page.wait_for_selector("[data-test='job-listing-item'], ul", timeout=15000)
@@ -218,9 +235,13 @@ class GlassdoorScraper(BaseScraper):
                 print(f"[Glassdoor] Warning: selector not found or timeout: {e}")
 
             html_content = page.content()
-            context.close()
+            
+            if browser:
+                browser.close()
+            else:
+                context.close()
 
-        # Parse local HTML file fallback or the dynamic page HTML
+        # Parse HTML page content
         all_raw_jobs = self._extract_jobs_from_html(html_content)
         if not all_raw_jobs:
             print("[Glassdoor] No jobs parsed from live HTML page. Falling back to local search HTML file...")
