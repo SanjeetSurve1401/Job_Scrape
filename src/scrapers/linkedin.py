@@ -1,218 +1,222 @@
+import os
+import time
 import re
-import requests
-from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor
+import json
+import urllib.parse
 from typing import List
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
-try:
-    from jobspy import scrape_jobs
-    HAS_JOBSPY = True
-except ImportError:
-    HAS_JOBSPY = False
-
+from src.config import Config
 from src.scrapers.base import BaseScraper
 from src.scrapers import register_scraper
 from src.models import Job
-from src.config import Config
 
 @register_scraper
 class LinkedInScraper(BaseScraper):
-    _BASE_CARD_PATTERN = re.compile("base-card")
-    _FULL_LINK_PATTERN = re.compile("base-card__full-link")
-    _TITLE_PATTERN = re.compile("base-search-card__title")
-    _SUBTITLE_PATTERN = re.compile("base-search-card__subtitle")
-    _LOCATION_PATTERN = re.compile("job-search-card__location")
-
-    def __init__(self):
-        self.session = requests.Session()
-        user_agent = getattr(Config, "LINKEDIN_USER_AGENT", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        self.headers = {
-            "User-Agent": user_agent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        self.session.headers.update(self.headers)
-        
-        cookie = getattr(Config, "LINKEDIN_COOKIE", None)
-        if cookie:
-            self.session.headers.update({"Cookie": cookie})
-
-    def fetch_job_description(self, job_id: str) -> str:
-        """Fetches the detailed job description HTML page and extracts text."""
-        if not job_id:
-            return ""
-            
-        url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobCardContent/{job_id}"
-        try:
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'lxml')
-                desc_section = soup.find("div", class_="show-more-less-html__markup")
-                if not desc_section:
-                    desc_section = soup.find("section", class_="description")
-                if not desc_section:
-                    desc_section = soup
-                    
-                return desc_section.get_text(separator="\n").strip()
-            else:
-                url_view = f"https://www.linkedin.com/jobs/view/{job_id}"
-                response_view = self.session.get(url_view, timeout=10)
-                if response_view.status_code == 200:
-                    soup = BeautifulSoup(response_view.text, 'lxml')
-                    desc_div = soup.find("div", class_="description__text")
-                    if not desc_div:
-                        desc_div = soup.find("div", class_=re.compile("show-more-less-html__markup"))
-                    if desc_div:
-                        return desc_div.get_text(separator="\n").strip()
-        except Exception as e:
-            print(f"Error fetching LinkedIn job description for ID {job_id}: {e}")
-            
-        return ""
-
-    def _scrape_via_jobspy(self, role: str, location: str, limit: int) -> List[Job]:
-        """Scrapes LinkedIn using the python-jobspy library."""
-        print("[LinkedIn] Attempting scrape using python-jobspy...")
-        try:
-            df = scrape_jobs(
-                site_name=["linkedin"],
-                search_term=role,
-                location=location,
-                results_wanted=limit
-            )
-            
-            jobs = []
-            records = df.to_dict(orient="records")
-            for item in records:
-                # Safely convert to string and handle potential NaN values (floats in pandas)
-                title = str(item.get("title")).strip() if item.get("title") is not None else ""
-                company = str(item.get("company")).strip() if item.get("company") is not None else ""
-                loc = str(item.get("location")).strip() if item.get("location") is not None else ""
-                url = str(item.get("job_url")).strip() if item.get("job_url") is not None else ""
-                desc = str(item.get("description")).strip() if item.get("description") is not None else ""
-                salary = item.get("salary")
-                job_id = str(item.get("id") or "")
-                
-                # Check for pandas NaN values
-                if title.lower() == "nan": title = ""
-                if company.lower() == "nan": company = ""
-                if loc.lower() == "nan": loc = ""
-                if desc.lower() == "nan": desc = ""
-                
-                if not title or not company:
-                    continue
-                
-                job_obj = Job(
-                    title=title,
-                    company=company,
-                    location=loc if loc else location,
-                    about_job=desc,
-                    site=["LinkedIn"],
-                    url=url,
-                    salary=str(salary) if salary is not None and str(salary).lower() != "nan" else None,
-                    job_id=job_id
-                )
-                jobs.append(job_obj)
-            return jobs
-        except Exception as e:
-            print(f"[LinkedIn] python-jobspy execution failed: {e}. Falling back to manual scraping.")
-            return []
-
     def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        """Scrapes LinkedIn jobs matching the search query parameters."""
-        print(f"Running LinkedIn Scraper for Role: '{role}', Location: '{location}'")
-        
-        # If we do not have cookies, try jobspy first. If we have cookies, use manual scraper with session cookies.
-        use_jobspy = HAS_JOBSPY and not getattr(Config, "LINKEDIN_COOKIE", None)
-        if use_jobspy:
-            jobs = self._scrape_via_jobspy(role, location, limit)
-            if jobs:
-                return jobs
-
-        # Fallback to manual guest scraping
-        query_role = requests.utils.quote(role)
-        query_location = requests.utils.quote(location)
-        
-        url = f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords={query_role}&location={query_location}&start=0"
-        
+        print(f"\n[LinkedIn] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
         scraped_jobs = []
-        try:
-            response = self.session.get(url, timeout=10)
-            if response.status_code != 200:
-                print(f"LinkedIn search returned status code: {response.status_code}")
+        
+        # Load storage state from Config
+        storage_state = None
+        if Config.LINKEDIN_STORAGE_STATE and Config.LINKEDIN_STORAGE_STATE.strip():
+            try:
+                storage_state = json.loads(Config.LINKEDIN_STORAGE_STATE)
+                print("[LinkedIn] Loaded storage state from .env settings.")
+            except Exception as e:
+                print(f"[LinkedIn Warning] Failed to parse LINKEDIN_STORAGE_STATE JSON: {e}")
+                
+        user_data_dir = os.path.abspath("./playwright_linkedin_session")
+        
+        with sync_playwright() as p:
+            browser = None
+            context = None
+            
+            try:
+                if storage_state:
+                    # Use storage state in a clean browser session
+                    # This prevents directory locking conflicts when running multiple tasks
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        storage_state=storage_state,
+                        user_agent=Config.LINKEDIN_USER_AGENT
+                    )
+                else:
+                    # Fallback to persistent context folder
+                    if not os.path.exists(user_data_dir):
+                        print("[LinkedIn ERROR] No storage state in .env or session directory found! Run linkedin_login.py first.")
+                        return []
+                    print("[LinkedIn] Using persistent session directory.")
+                    context = p.chromium.launch_persistent_context(
+                        user_data_dir=user_data_dir,
+                        headless=True,
+                        channel="chrome",
+                        args=["--disable-blink-features=AutomationControlled"],
+                        ignore_default_args=["--enable-automation"]
+                    )
+            except Exception as e:
+                print(f"[LinkedIn ERROR] Could not launch Playwright browser session: {e}")
                 return []
-                
-            soup = BeautifulSoup(response.text, 'lxml')
-            cards = soup.find_all("li")
-            print(f"Found {len(cards)} job cards in LinkedIn search response.")
             
-            cards = cards[:limit]
+            page = context.pages[0] if context.pages else context.new_page()
             
-            parsed_cards = []
-            for card in cards:
-                job_id_elem = card.find("div", class_=self._BASE_CARD_PATTERN)
-                job_id = ""
-                if job_id_elem and job_id_elem.has_attr("data-entity-urn"):
-                    urn = job_id_elem["data-entity-urn"]
-                    job_id = urn.split(":")[-1]
-                if not job_id:
-                    a_elem = card.find("a", class_=self._FULL_LINK_PATTERN)
-                    if a_elem and a_elem.has_attr("data-id"):
-                        job_id = a_elem["data-id"]
+            # Go to LinkedIn job search page
+            query_role = urllib.parse.quote(role)
+            query_loc = urllib.parse.quote(location)
+            url = f"https://www.linkedin.com/jobs/search/?keywords={query_role}&location={query_loc}"
+            
+            print(f"[LinkedIn] Navigating to: {url}")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(5000)
                 
-                title_elem = card.find("h3", class_=self._TITLE_PATTERN)
-                title = title_elem.get_text().strip() if title_elem else ""
+                # Check if we are redirected to login page or if we are logged in
+                if "login" in page.url:
+                    print("[LinkedIn ERROR] Session expired or not logged in! Run linkedin_login.py to update session.")
+                    if browser:
+                        browser.close()
+                    else:
+                        context.close()
+                    return []
                 
-                company_elem = card.find("h4", class_=self._SUBTITLE_PATTERN)
-                company = company_elem.get_text().strip() if company_elem else ""
+                page.wait_for_selector(".scaffold-layout__list-container, .jobs-search-results-list", timeout=15000)
+            except Exception as e:
+                print(f"[LinkedIn] Warning: job list selector not found or timeout: {e}")
                 
-                location_elem = card.find("span", class_=self._LOCATION_PATTERN)
-                location_name = location_elem.get_text().strip() if location_elem else ""
-                
-                link_elem = card.find("a", class_=self._FULL_LINK_PATTERN)
-                job_url = link_elem["href"].split("?")[0] if link_elem and link_elem.has_attr("href") else ""
-                if not job_url and job_id:
-                    job_url = f"https://www.linkedin.com/jobs/view/{job_id}"
-                
-                if not title or not company:
-                    continue
-                
-                parsed_cards.append({
-                    "job_id": job_id,
-                    "title": title,
-                    "company": company,
-                    "location_name": location_name,
-                    "job_url": job_url
-                })
+            # Scroll the job list pane to load more items
+            try:
+                pane_selector = ".jobs-search-results-list, .jobs-search-results-list__container"
+                pane = page.locator(pane_selector).first
+                if pane:
+                    print("[LinkedIn] Scrolling job list to load more jobs...")
+                    for _ in range(5):
+                        pane.evaluate("el => el.scrollTop = el.scrollHeight")
+                        page.wait_for_timeout(1000)
+            except Exception as scroll_error:
+                print(f"[LinkedIn] Scroll failed: {scroll_error}")
 
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {
-                    executor.submit(self.fetch_job_description, c["job_id"]): c 
-                    for c in parsed_cards
-                }
-                
-                for future in futures:
-                    c = futures[future]
-                    try:
-                        about_job = future.result()
-                    except Exception as exc:
-                        print(f"Error resolving future for job ID {c['job_id']}: {exc}")
-                        about_job = ""
+            # Extract job cards
+            html = page.content()
+            soup = BeautifulSoup(html, "lxml")
+            
+            # Select job items
+            cards = soup.select("li.jobs-search-results__list-item, div.job-card-container, [data-occludable-job-id]")
+            print(f"[LinkedIn] Found {len(cards)} raw job cards in HTML.")
+            
+            parsed_jobs_info = []
+            for card in cards:
+                if len(parsed_jobs_info) >= limit:
+                    break
                     
+                try:
+                    link_elem = card.find("a", href=True)
+                    if not link_elem:
+                        continue
+                        
+                    href = link_elem["href"]
+                    # Extract job ID
+                    job_id = ""
+                    if "/jobs/view/" in href:
+                        match = re.search(r"/jobs/view/(\d+)", href)
+                        if match:
+                            job_id = match.group(1)
+                    if not job_id and card.has_attr("data-occludable-job-id"):
+                        job_id = card["data-occludable-job-id"]
+                    if not job_id and card.has_attr("data-job-id"):
+                        job_id = card["data-job-id"]
+                        
+                    if not job_id:
+                        continue
+                        
+                    title_elem = card.select_one(".job-card-list__title, .job-card-container__link, a.job-card-list__title")
+                    title = title_elem.get_text().strip() if title_elem else ""
+                    if not title and link_elem:
+                        title = link_elem.get_text().strip()
+                        
+                    company_elem = card.select_one(".job-card-container__company-name, .job-card-container__primary-description, .artdeco-entity-lockup__subtitle")
+                    company = company_elem.get_text().strip() if company_elem else ""
+                    company = company.split("\n")[0].strip()
+                    
+                    loc_elem = card.select_one(".job-card-container__metadata-item, .job-card-container__primary-description")
+                    loc_name = loc_elem.get_text().strip() if loc_elem else location
+                    
+                    job_url = f"https://www.linkedin.com/jobs/view/{job_id}"
+                    
+                    if not title or not company:
+                        continue
+                        
+                    if any(x["job_id"] == job_id for x in parsed_jobs_info):
+                        continue
+                        
+                    parsed_jobs_info.append({
+                        "job_id": job_id,
+                        "title": title,
+                        "company": company,
+                        "location_name": loc_name,
+                        "job_url": job_url
+                    })
+                except Exception as card_err:
+                    print(f"[LinkedIn] Error parsing card: {card_err}")
+            
+            print(f"[LinkedIn] Successfully parsed {len(parsed_jobs_info)} jobs. Fetching descriptions...")
+            
+            # Fetch descriptions using Playwright
+            for info in parsed_jobs_info:
+                try:
+                    print(f"[LinkedIn] Fetching details for '{info['title']}' at {info['company']}...")
+                    page.goto(info["job_url"], wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(3000)
+                    
+                    desc_elem = page.locator(".jobs-description__content, .jobs-description-content__text, div#job-details").first
+                    about_job = ""
+                    if desc_elem.is_visible():
+                        about_job = desc_elem.inner_text().strip()
+                    else:
+                        info_soup = BeautifulSoup(page.content(), "lxml")
+                        desc_div = info_soup.select_one(".jobs-description__content, .jobs-description-content__text, #job-details")
+                        if desc_div:
+                            about_job = desc_div.get_text(separator="\n").strip()
+                            
                     if not about_job:
-                        about_job = f"Job title: {c['title']}. Company: {c['company']}. Location: {c['location_name']}. For full description and to apply, please view: {c['job_url']}"
+                        about_job = f"Job title: {info['title']}. Company: {info['company']}. Location: {info['location_name']}. Please apply directly on LinkedIn: {info['job_url']}"
+                        
+                    salary = None
+                    salary_elem = page.locator(".job-details-jobs-unified-top-card__job-insight, .jobs-unified-top-card__job-insight").first
+                    if salary_elem.is_visible():
+                        text = salary_elem.inner_text()
+                        if "$" in text or "₹" in text or "£" in text or "€" in text:
+                            salary = text.strip()
                     
                     job_obj = Job(
-                        title=c["title"],
-                        company=c["company"],
-                        location=c["location_name"],
+                        title=info["title"],
+                        company=info["company"],
+                        location=info["location_name"],
                         about_job=about_job,
                         site=["LinkedIn"],
-                        url=c["job_url"],
-                        job_id=c["job_id"]
+                        url=info["job_url"],
+                        salary=salary,
+                        job_id=info["job_id"]
                     )
                     scraped_jobs.append(job_obj)
-                
-        except Exception as e:
-            print(f"Error scraping LinkedIn: {e}")
+                    
+                except Exception as desc_err:
+                    print(f"[LinkedIn] Error fetching details for job ID {info['job_id']}: {desc_err}")
+                    job_obj = Job(
+                        title=info["title"],
+                        company=info["company"],
+                        location=info["location_name"],
+                        about_job=f"Job title: {info['title']}. Company: {info['company']}. Location: {info['location_name']}. Link: {info['job_url']}",
+                        site=["LinkedIn"],
+                        url=info["job_url"],
+                        job_id=info["job_id"]
+                    )
+                    scraped_jobs.append(job_obj)
             
+            if browser:
+                browser.close()
+            else:
+                context.close()
+            
+        print(f"[LinkedIn] Completed. Scraped {len(scraped_jobs)} jobs.")
         return scraped_jobs

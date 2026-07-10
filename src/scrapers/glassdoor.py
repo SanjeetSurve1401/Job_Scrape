@@ -1,26 +1,15 @@
-from typing import Optional, List, Any
 import os
-import json
+import time
 import re
+import json
+import urllib.parse
+from typing import Optional, List, Any
 from bs4 import BeautifulSoup
-
-try:
-    from curl_cffi import requests as cffi_requests
-    HAS_CURL_CFFI = True
-except ImportError:
-    HAS_CURL_CFFI = False
-    import requests as fallback_requests
-
-try:
-    from jobspy import scrape_jobs
-    HAS_JOBSPY = True
-except ImportError:
-    HAS_JOBSPY = False
+from playwright.sync_api import sync_playwright
 
 from src.scrapers.base import BaseScraper
 from src.scrapers import register_scraper
 from src.models import Job
-from src.config import Config
 
 @register_scraper
 class GlassdoorScraper(BaseScraper):
@@ -33,37 +22,6 @@ class GlassdoorScraper(BaseScraper):
 
     def __init__(self):
         self.search_html_path = "glassdoor_search.html"
-        self.headers = {}
-        self.cookies = {}
-        self.live_fetch_disabled = False
-        self.load_session()
-
-    def load_session(self):
-        """Loads session User-Agent and Cookie from .env via Config."""
-        user_agent = Config.GLASSDOOR_USER_AGENT.strip()
-        cookie_str = Config.GLASSDOOR_COOKIE.strip()
-
-        if not user_agent or not cookie_str:
-            if not HAS_JOBSPY:
-                print("Warning: GLASSDOOR_USER_AGENT or GLASSDOOR_COOKIE not set in .env. Live Glassdoor requests will fail.")
-            return
-
-        self.headers = {
-            "User-Agent": user_agent,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "keep-alive"
-        }
-
-        # Parse Cookie header string into a dict for curl_cffi
-        cookies_dict = {}
-        for item in cookie_str.split(";"):
-            if "=" in item:
-                k, v = item.split("=", 1)
-                cookies_dict[k.strip()] = v.strip()
-        self.cookies = cookies_dict
-
-        print("Glassdoor session credentials loaded from .env successfully.")
 
     # ── RSC Parsing Helpers ──────────────────────────────────────────
 
@@ -99,7 +57,7 @@ class GlassdoorScraper(BaseScraper):
         """Locates the pageProps JSON payload from the RSC state map."""
         page_props_str = ""
         
-        # Iterate values directly to locate pageProps (dynamic, avoids fragile hardcoded keys)
+        # Iterate values directly to locate pageProps
         for val in state_map.values():
             if "pageProps" in val:
                 page_props_str = val
@@ -115,7 +73,6 @@ class GlassdoorScraper(BaseScraper):
         
         json_str = page_props_str[start_brace:end_brace + 1]
         try:
-            # Clean RSC-specific tokens so we can parse as standard JSON
             cleaned = self._L_REF_PATTERN.sub('null', json_str)
             cleaned = self._UNDEF_PATTERN.sub('null', cleaned)
             return json.loads(cleaned)
@@ -171,8 +128,6 @@ class GlassdoorScraper(BaseScraper):
             return data
         return data
 
-    # ── Extraction from HTML (local or live) ─────────────────────────
-
     def _extract_jobs_from_html(self, html_content: str) -> list:
         """
         Extracts job listing data from a Glassdoor HTML page by parsing 
@@ -200,7 +155,6 @@ class GlassdoorScraper(BaseScraper):
         elif isinstance(job_listings_container, list):
             job_list = job_listings_container
         
-        # Resolve RSC references for each job
         resolved_jobs = []
         memo = {}
         for job_item in job_list:
@@ -209,212 +163,138 @@ class GlassdoorScraper(BaseScraper):
         
         return resolved_jobs
 
-    # ── Live Fetch (using curl_cffi) ─────────────────────────────────
+    # ── Main Scrape Method ───────────────────────────────────────────
 
-    def fetch_live_search(self, keywords: str, location: str, page: int = 1) -> Optional[str]:
-        """
-        Fetches a Glassdoor search results page live using curl_cffi 
-        with browser impersonation to bypass Cloudflare.
-        """
-        if self.live_fetch_disabled:
-            return None
+    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
+        print(f"\n[Glassdoor] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
+        scraped_jobs = []
+        user_data_dir = os.path.abspath("./playwright_glassdoor_session")
         
-        if not HAS_CURL_CFFI:
-            print("Warning: curl_cffi is not installed. Live Glassdoor fetching is disabled.")
-            print("  Install it with: pip install curl_cffi")
-            self.live_fetch_disabled = True
-            return None
-        
-        if not self.cookies:
-            print("Warning: No Glassdoor session cookies loaded. Live fetching is disabled.")
-            self.live_fetch_disabled = True
-            return None
-        
-        base_url = "https://www.glassdoor.com/Job/jobs.htm"
-        params = {
-            "sc.keyword": keywords,
-            "locN": location,
-            "p": page
-        }
-        
-        try:
-            response = cffi_requests.get(
-                base_url,
-                params=params,
-                headers=self.headers,
-                cookies=self.cookies,
-                impersonate="firefox",
-                timeout=15
-            )
+        if not os.path.exists(user_data_dir):
+            print("[Glassdoor ERROR] Persistent session directory does not exist! Run glassdoor_login.py first.")
+            return []
             
-            if response.status_code == 403:
-                print("Glassdoor returned 403 Forbidden. Session cookies may have expired or Cloudflare blocked the request.")
-                print("  → To refresh cookies: Log into Glassdoor in your browser, copy the Cookie and User-Agent")
-                print("    headers from DevTools (Network tab) into .env.")
-                print("  → Skipping all further live Glassdoor requests for this run.")
-                self.live_fetch_disabled = True
-                return None
-            elif response.status_code != 200:
-                print(f"Glassdoor fetch failed with status code {response.status_code}")
-                return None
+        with sync_playwright() as p:
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    headless=True,
+                    channel="chrome",
+                    args=["--disable-blink-features=AutomationControlled"],
+                    ignore_default_args=["--enable-automation"]
+                )
+            except Exception as e:
+                print(f"[Glassdoor] Failed to launch with Chrome channel ({e}). Trying default chromium...")
+                try:
+                    context = p.chromium.launch_persistent_context(
+                        user_data_dir=user_data_dir,
+                        headless=True,
+                        args=["--disable-blink-features=AutomationControlled"],
+                        ignore_default_args=["--enable-automation"]
+                    )
+                except Exception as e2:
+                    print(f"[Glassdoor ERROR] Could not launch Playwright browser context: {e2}")
+                    return []
             
-            return response.text
+            page = context.pages[0] if context.pages else context.new_page()
             
-        except Exception as e:
-            print(f"Error fetching live Glassdoor search: {e}")
-            self.live_fetch_disabled = True
-            return None
+            query_role = urllib.parse.quote(role)
+            query_loc = urllib.parse.quote(location)
+            url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query_role}&locN={query_loc}"
+            
+            print(f"[Glassdoor] Navigating to: {url}")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(5000)
+                
+                # Check for login redirection
+                if "member/profile" in page.url:
+                    print("[Glassdoor ERROR] Session expired or not logged in! Run glassdoor_login.py to update session.")
+                    context.close()
+                    return []
+                
+                page.wait_for_selector("[data-test='job-listing-item'], ul", timeout=15000)
+            except Exception as e:
+                print(f"[Glassdoor] Warning: selector not found or timeout: {e}")
 
-    def _scrape_via_jobspy(self, role: str, location: str, limit: int) -> List[Job]:
-        """Scrapes Glassdoor using the python-jobspy library."""
-        print("[Glassdoor] Attempting scrape using python-jobspy...")
-        try:
-            df = scrape_jobs(
-                site_name=["glassdoor"],
-                search_term=role,
-                location=location,
-                results_wanted=limit
-            )
+            html_content = page.content()
+            context.close()
+
+        # Parse local HTML file fallback or the dynamic page HTML
+        all_raw_jobs = self._extract_jobs_from_html(html_content)
+        if not all_raw_jobs:
+            print("[Glassdoor] No jobs parsed from live HTML page. Falling back to local search HTML file...")
+            if os.path.exists(self.search_html_path):
+                with open(self.search_html_path, 'r', encoding='utf-8') as f:
+                    local_html = f.read()
+                all_raw_jobs = self._extract_jobs_from_html(local_html)
+                
+        if not all_raw_jobs:
+            print("[Glassdoor] No job listings found.")
+            return []
             
-            jobs = []
-            records = df.to_dict(orient="records")
-            for item in records:
-                # Safely convert to string and handle potential NaN values (floats in pandas)
-                title = str(item.get("title")).strip() if item.get("title") is not None else ""
-                company = str(item.get("company")).strip() if item.get("company") is not None else ""
-                loc = str(item.get("location")).strip() if item.get("location") is not None else ""
-                url = str(item.get("job_url")).strip() if item.get("job_url") is not None else ""
-                desc = str(item.get("description")).strip() if item.get("description") is not None else ""
-                salary = item.get("salary")
-                job_id = str(item.get("id") or "")
+        all_raw_jobs = all_raw_jobs[:limit]
+        
+        # Convert raw job data to Job objects
+        for item in all_raw_jobs:
+            try:
+                jobview = item.get("jobview", {})
+                header = jobview.get("header", {})
+                job_details = jobview.get("job", {})
                 
-                # Check for pandas NaN values
-                if title.lower() == "nan": title = ""
-                if company.lower() == "nan": company = ""
-                if loc.lower() == "nan": loc = ""
-                if desc.lower() == "nan": desc = ""
+                title = header.get("jobTitleText") or job_details.get("jobTitleText") or ""
                 
-                if not title or not company:
-                    continue
+                company = header.get("employerNameFromSearch") or ""
+                if not company and "employer" in header:
+                    company = header["employer"].get("name") or header["employer"].get("shortName") or ""
+                
+                location_name = header.get("locationName", "")
+                
+                url = header.get("seoJobLink") or ""
+                if url and not url.startswith("http"):
+                    url = "https://www.glassdoor.com" + url
+                
+                # Handle salary
+                salary_info = header.get("payPeriodAdjustedPay")
+                salary = None
+                if salary_info:
+                    p10 = salary_info.get("p10")
+                    p90 = salary_info.get("p90")
+                    p50 = salary_info.get("p50")
+                    currency = header.get("payCurrency", "INR")
+                    if p10 and p90:
+                        salary = f"{currency} {p10} - {p90}"
+                    elif p50:
+                        salary = f"{currency} {p50}"
+                
+                desc_fragments = job_details.get("descriptionFragmentsText")
+                about_job = ""
+                if isinstance(desc_fragments, list):
+                    about_job = " ".join([str(f) for f in desc_fragments if f])
+                elif isinstance(desc_fragments, str):
+                    about_job = desc_fragments
+                
+                if not about_job:
+                    about_job = f"Job title: {title}. Company: {company}. Location: {location_name}. For full description and to apply, please view: {url}"
+                
+                job_id = str(job_details.get("listingId") or "")
+                if not job_id:
+                    jl_match = self._JL_PATTERN.search(url) if url else None
+                    if jl_match:
+                        job_id = jl_match.group(1)
                 
                 job_obj = Job(
                     title=title,
                     company=company,
-                    location=loc if loc else location,
-                    about_job=desc,
+                    location=location_name,
+                    about_job=about_job,
                     site=["Glassdoor"],
                     url=url,
-                    salary=str(salary) if salary is not None and str(salary).lower() != "nan" else None,
+                    salary=salary,
                     job_id=job_id
                 )
-                jobs.append(job_obj)
-            return jobs
-        except Exception as e:
-            print(f"[Glassdoor] python-jobspy execution failed: {e}. Falling back to manual scraping.")
-            return []
-
-    # ── Main Scrape Method ───────────────────────────────────────────
-
-    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        """Scrapes Glassdoor jobs from local HTML and/or live search."""
-        print(f"Running Glassdoor Scraper for Role: '{role}', Location: '{location}'")
-        
-        all_raw_jobs = []
-        
-        # Strategy 1: Parse local HTML file if available (Fastest, zero network delay)
-        if os.path.exists(self.search_html_path):
-            print(f"Parsing local Glassdoor HTML file: {self.search_html_path}")
-            with open(self.search_html_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-            
-            local_jobs = self._extract_jobs_from_html(html_content)
-            if local_jobs:
-                print(f"Found {len(local_jobs)} job listings in local Glassdoor file.")
-                all_raw_jobs.extend(local_jobs)
+                scraped_jobs.append(job_obj)
+            except Exception as e:
+                print(f"[Glassdoor] Error processing listing: {e}")
                 
-        # Strategy 2: If no local HTML file, try JobSpy (Highly reliable Cloudflare bypass)
-        if not all_raw_jobs and HAS_JOBSPY:
-            jobspy_jobs = self._scrape_via_jobspy(role, location, limit)
-            if jobspy_jobs:
-                return jobspy_jobs
-        
-        # Strategy 3: Fallback to live fetch via session credentials
-        if not all_raw_jobs and HAS_CURL_CFFI and not self.live_fetch_disabled:
-            print("No local results or JobSpy. Attempting live Glassdoor session search...")
-            live_html = self.fetch_live_search(role, location)
-            if live_html:
-                live_jobs = self._extract_jobs_from_html(live_html)
-                if live_jobs:
-                    print(f"Found {len(live_jobs)} job listings from live Glassdoor search.")
-                    all_raw_jobs.extend(live_jobs)
-        
-        if not all_raw_jobs:
-            print("No Glassdoor job listings found from any source.")
-            return []
-        
-        # Limit the listings
-        all_raw_jobs = all_raw_jobs[:limit]
-        
-        # Convert raw job data to Job objects
-        scraped_jobs = []
-        for item in all_raw_jobs:
-            jobview = item.get("jobview", {})
-            header = jobview.get("header", {})
-            job_details = jobview.get("job", {})
-            
-            title = header.get("jobTitleText") or job_details.get("jobTitleText") or ""
-            
-            company = header.get("employerNameFromSearch") or ""
-            if not company and "employer" in header:
-                company = header["employer"].get("name") or header["employer"].get("shortName") or ""
-            
-            location_name = header.get("locationName", "")
-            
-            # Construct URL
-            url = header.get("seoJobLink") or ""
-            if url and not url.startswith("http"):
-                url = "https://www.glassdoor.co.in" + url
-            
-            # Handle salary
-            salary_info = header.get("payPeriodAdjustedPay")
-            salary = None
-            if salary_info:
-                p10 = salary_info.get("p10")
-                p90 = salary_info.get("p90")
-                p50 = salary_info.get("p50")
-                currency = header.get("payCurrency", "INR")
-                if p10 and p90:
-                    salary = f"{currency} {p10} - {p90}"
-                elif p50:
-                    salary = f"{currency} {p50}"
-            
-            # Extract description from the payload (no live fetch needed)
-            desc_fragments = job_details.get("descriptionFragmentsText")
-            about_job = ""
-            if isinstance(desc_fragments, list):
-                about_job = " ".join([str(f) for f in desc_fragments if f])
-            elif isinstance(desc_fragments, str):
-                about_job = desc_fragments
-            
-            if not about_job:
-                about_job = f"Job title: {title}. Company: {company}. Location: {location_name}. For full description and to apply, please view: {url}"
-            
-            job_id = str(job_details.get("listingId") or "")
-            if not job_id:
-                jl_match = self._JL_PATTERN.search(url) if url else None
-                if jl_match:
-                    job_id = jl_match.group(1)
-            
-            job_obj = Job(
-                title=title,
-                company=company,
-                location=location_name,
-                about_job=about_job,
-                site=["Glassdoor"],
-                url=url,
-                salary=salary,
-                job_id=job_id
-            )
-            scraped_jobs.append(job_obj)
-            
         return scraped_jobs

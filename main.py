@@ -10,6 +10,8 @@ from src.verifier import JobVerifier
 from src.scrapers import get_scrapers
 from src.models import Job
 from src.tailor_cv.matcher import run_cv_matching
+from src.graph import build_scraper_graph
+
 
 def parse_args():
     """Parses command-line arguments."""
@@ -344,35 +346,13 @@ def main():
 
     # 2. Otherwise run scraping as normal
     print("=" * 60)
-    print(f"Starting Job Scraper Engine")
+    print(f"Starting Job Scraper Engine (LangGraph)")
     print(f"Role: {args.role}")
     print(f"Location: {args.location}")
     print(f"Experience Criteria: {args.experience}")
     print(f"Total limit: {args.limit}")
     print("=" * 60)
 
-    # Initialize Database using Constructor-based Dependency Injection
-    db = None
-    if Config.MONGO_URI and Config.MONGO_URI.strip():
-        try:
-            print("Connecting to MongoDB...")
-            db = DatabaseHandler(
-                uri=Config.MONGO_URI,
-                db_name=Config.DB_NAME,
-                collection_name=Config.COLLECTION_NAME
-            )
-            print("Connected to MongoDB successfully.")
-        except Exception as e:
-            print(f"[Warning] MongoDB connection failed ({e})")
-            print("Please check your MONGO_URI in .env if you want to write to MongoDB.")
-    
-    if db is None:
-        print("Falling back to local in-memory storage (results will be verified, deduplicated, and saved to the JSON output file).")
-        db = LocalDatabaseHandler(filename=args.output)
-
-    # Instantiate verifier
-    verifier = JobVerifier()
-    
     # Dynamically discover scrapers (OCP) and filter based on user selection
     selected_sources = [s.strip().lower() for s in args.sources.split(",")]
     scraper_classes = [
@@ -411,67 +391,37 @@ def main():
             check_and_login_indeed()
         except Exception as e:
             print(f"[Warning] Indeed login helper failed to run: {e}")
+
+    # Build and invoke LangGraph Scraper Graph
+    print("\n[Pipeline] Building and running LangGraph pipeline...")
+    scraper_graph = build_scraper_graph()
+    initial_state = {
+        "role": args.role,
+        "location": args.location,
+        "experience": args.experience,
+        "limit": args.limit,
+        "groq_model": args.groq_model,
+        "cv_text": cv_text,
+        "sources": selected_sources,
+        "output_path": args.output,
+        "raw_jobs": []
+    }
     
-    verified_jobs_dict = {}
-    total_raw_scraped = 0
-    total_new_inserted = 0
-    total_updated_count = 0
+    graph_result = scraper_graph.invoke(initial_state)
     
-    attempts = 0
-    max_attempts = 5
-    multiplier = 1.0
+    # Process summary and save outputs
+    stats = graph_result.get("summary_stats", {})
+    total_raw_scraped = stats.get("total_raw", 0)
+    verified_jobs_count = stats.get("total_verified", 0)
+    total_new_inserted = stats.get("new_inserted", 0)
+    total_updated_count = stats.get("updated", 0)
     
-    while len(verified_jobs_dict) < args.limit and attempts < max_attempts:
-        attempts += 1
-        if attempts > 1:
-            print(f"\n[Scraper Loop] Target verified limit ({args.limit}) not met (Currently verified: {len(verified_jobs_dict)}).")
-            print(f"[Scraper Loop] Scraping more jobs... (Attempt {attempts}/{max_attempts})")
-            # Scale scraping limit to look deeper
-            multiplier += 1.0
-            
-        remaining_target = args.limit - len(verified_jobs_dict)
-        current_scrape_limit = int(remaining_target * multiplier)
-        
-        # Scrape raw jobs
-        raw_jobs = execute_scraping(scraper_classes, args, limit=current_scrape_limit)
-        total_raw_scraped += len(raw_jobs)
-        
-        if not raw_jobs:
-            print("[Scraper Loop] No more raw jobs returned by scrapers. Stopping loop.")
-            break
-            
-        # Process, verify, score inline and save to DB
-        verified_count, new_inserted, updated_count, saved_jobs = process_and_save_jobs(
-            db, verifier, raw_jobs, args, cv_text=cv_text
-        )
-        
-        total_new_inserted += new_inserted
-        total_updated_count += updated_count
-        
-        # Add newly saved/verified jobs to our tracking dict
-        for doc in saved_jobs:
-            title = doc.get("title", "")
-            company = doc.get("company", "")
-            location = doc.get("location", "")
-            key = f"{title.lower().strip()}|{company.lower().strip()}|{location.lower().strip()}"
-            verified_jobs_dict[key] = doc
-            
-        # If no new verified jobs were found in this attempt, stop to prevent rate limit blocks
-        if verified_count == 0:
-            print("[Scraper Loop] No new jobs passed verification in this attempt. Stopping loop.")
-            break
-            
-    # Print execution summary
-    print_summary(total_raw_scraped, len(verified_jobs_dict), total_new_inserted, total_updated_count)
+    print_summary(total_raw_scraped, verified_jobs_count, total_new_inserted, total_updated_count)
     
     # Export to output JSON file
-    if isinstance(db, LocalDatabaseHandler):
-        export_to_json(db.get_all_jobs(), args.output)
-    else:
-        export_to_json(list(verified_jobs_dict.values()), args.output)
-        
-    # Close database connection
-    db.close()
+    processed_jobs = graph_result.get("processed_jobs_list", [])
+    export_to_json(processed_jobs, args.output)
+
 
     # Match CV
     if os.path.exists(args.cv):

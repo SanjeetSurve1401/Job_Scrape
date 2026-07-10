@@ -2,6 +2,7 @@ import os
 import time
 import sys
 import shutil
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -41,7 +42,6 @@ def run_playwright_login():
             from playwright.sync_api import sync_playwright
         except Exception as e:
             print(f"[ERROR] Playwright install failed: {e}")
-            print("Please try manual login or install playwright manually.")
             return None
 
     print("\nOpening Real Chrome browser for LinkedIn login. Please log in manually...")
@@ -49,7 +49,13 @@ def run_playwright_login():
         with sync_playwright() as p:
             user_data_dir = os.path.abspath("./playwright_linkedin_session")
             
-            # Try to launch with real Google Chrome browser first to bypass Cloudflare
+            # Wipe old session data to force clean login screen if login runs
+            if os.path.exists(user_data_dir):
+                try:
+                    shutil.rmtree(user_data_dir)
+                except Exception:
+                    pass
+                    
             try:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
@@ -59,8 +65,7 @@ def run_playwright_login():
                     ignore_default_args=["--enable-automation"]
                 )
             except Exception as e:
-                print(f"[INFO] Real Chrome could not be launched ({e}). Falling back to WebKit...")
-                # Fallback to webkit installation and launching
+                print(f"[INFO] Real Chrome could not be launched ({e}). Falling back to default WebKit...")
                 import subprocess
                 subprocess.run([sys.executable, "-m", "playwright", "install", "webkit"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 context = p.webkit.launch_persistent_context(
@@ -96,8 +101,12 @@ def run_playwright_login():
                 if other_cookies:
                     cookie_str += "; " + "; ".join(other_cookies)
                 
+                # Extract full storage state
+                storage_state = context.storage_state()
+                storage_state_str = json.dumps(storage_state)
+                
                 context.close()
-                return cookie_str, user_agent
+                return cookie_str, user_agent, storage_state_str
             else:
                 print("[ERROR] Login timeout or li_at cookie not found.")
                 context.close()
@@ -107,62 +116,35 @@ def run_playwright_login():
         return None
 
 def check_and_login():
+    linkedin_storage = os.getenv("LINKEDIN_STORAGE_STATE")
     linkedin_cookie = os.getenv("LINKEDIN_COOKIE")
     linkedin_ua = os.getenv("LINKEDIN_USER_AGENT")
     
-    force_login = False
-    if linkedin_cookie and linkedin_cookie.strip() and linkedin_ua and linkedin_ua.strip():
+    if linkedin_storage and linkedin_storage.strip() and linkedin_cookie and linkedin_cookie.strip():
         print("\nLinkedIn session credentials already exist in .env.")
-        print("1. Use existing session (Default)")
-        print("2. Login again / Update session credentials")
-        try:
-            choice = input("Option select kara (1/2, default 1): ").strip()
-        except EOFError:
-            choice = "1"
-        if choice == "2":
-            force_login = True
-            # Clear Playwright session directories to wipe old cookies/cache
-            session_dir = os.path.abspath("./playwright_linkedin_session")
-            if os.path.exists(session_dir):
-                print("[INFO] Clearing old browser session data...")
-                try:
-                    shutil.rmtree(session_dir)
-                except Exception as e:
-                    print(f"[Warning] Could not clear old session directory: {e}")
-        else:
-            return True
+        return True
 
     print("\n" + "="*50)
-    print("LINKEDIN LOGIN REQUIRED")
+    print("LINKEDIN LOGIN REQUIRED (AUTO-FLOW)")
     print("="*50)
-    print("[INFO] Playwright Auto-Login start hot aahe (Real Chrome open karel)...")
+    print("[INFO] Starting Playwright login browser automatically...")
     
-    cookie_str = None
-    user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    
-    if not force_login:
-        session_dir = os.path.abspath("./playwright_linkedin_session")
-        if os.path.exists(session_dir):
-            try:
-                shutil.rmtree(session_dir)
-            except Exception:
-                pass
-
     res = run_playwright_login()
     if res:
-        cookie_str, user_agent = res
-            
-    if cookie_str:
+        cookie_str, user_agent, storage_state_str = res
         update_env_file("LINKEDIN_COOKIE", f"'{cookie_str}'")
         update_env_file("LINKEDIN_USER_AGENT", f"'{user_agent}'")
-        print("\n[SUCCESS] LinkedIn session .env madhe save zali aahe!")
+        update_env_file("LINKEDIN_STORAGE_STATE", f"'{storage_state_str}'")
+        
+        print("\n[SUCCESS] LinkedIn session and full storage state saved to .env!")
         load_dotenv(override=True)
         from src.config import Config
         Config.LINKEDIN_COOKIE = os.getenv("LINKEDIN_COOKIE")
         Config.LINKEDIN_USER_AGENT = os.getenv("LINKEDIN_USER_AGENT", Config.LINKEDIN_USER_AGENT)
+        Config.LINKEDIN_STORAGE_STATE = os.getenv("LINKEDIN_STORAGE_STATE")
         return True
     else:
-        print("[WARNING] LinkedIn credentials save nahi zale. Scraping guest mode madhe chalel.")
+        print("[WARNING] LinkedIn credentials save failed.")
         return False
 
 if __name__ == "__main__":
