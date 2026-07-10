@@ -133,22 +133,13 @@ def check_and_login_glassdoor():
     print("\n" + "="*50)
     print("GLASSDOOR LOGIN & SESSION REQUIRED")
     print("="*50)
-    print("1. Playwright Auto-Login (Real Chrome open karel)")
-    print("2. Direct Cookie")
+    print("[INFO] Playwright Auto-Login start hot aahe (Real Chrome open karel)...")
     
-    try:
-        choice = input("Option select kara (1/2, default 1): ").strip()
-    except EOFError:
-        choice = "1"
-        
-    if not choice:
-        choice = "1"
-        
     cookie_str = None
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
     # If starting a fresh Playwright run, make sure old session is wiped if force_login was selected
-    if choice == "1" and not force_login:
+    if not force_login:
         # Wipe session directory to avoid false detection of old session
         session_dir = os.path.abspath("./playwright_glassdoor_session")
         if os.path.exists(session_dir):
@@ -157,63 +148,14 @@ def check_and_login_glassdoor():
             except Exception:
                 pass
 
-    if choice == "1":
-        res = run_playwright_login()
-        if res:
-            cookie_str, user_agent = res
-    elif choice == "2":
-        print("\n" + "-"*50)
-        print("STEPS TO SET GLASSDOOR COOKIES DIRECTLY IN .ENV:")
-        print("-"*50)
-        print("1. Open your web browser (Chrome, Firefox, Safari, etc.).")
-        print("2. Go to https://www.glassdoor.com and log in to your account.")
-        print("3. Press F12 (or right-click anywhere and select 'Inspect') to open Developer Tools.")
-        print("4. Go to the 'Network' tab and reload the page.")
-        print("5. Select any request to a glassdoor.com domain (e.g. 'jobs.htm' or 'index.htm').")
-        print("6. In the right pane, look at the 'Request Headers' section.")
-        print("7. Find the 'Cookie' header and copy its entire value.")
-        print("8. Open the '.env' file in this project folder.")
-        print("9. Paste the copied cookie value inside the single quotes of GLASSDOOR_COOKIE='...' (Also set GLASSDOOR_USER_AGENT if needed)")
-        print("10. Save the '.env' file.")
-        print("-"*50)
-        print("\n[INFO] Terminal freeze avoid karanyasathi direct terminal input disable kela aahe.")
-        
-        while True:
-            try:
-                input("\nKrupaya '.env' file edit kara ani ready zalya-var [ENTER] press kara to proceed...")
-            except EOFError:
-                pass
-            
-            # Reload .env and verify all required variables
-            load_dotenv(override=True)
-            cookie_str = os.getenv("GLASSDOOR_COOKIE")
-            user_agent = os.getenv("GLASSDOOR_USER_AGENT")
-            groq_api = os.getenv("GROQ_API")
-            
-            errors = []
-            if not cookie_str or not cookie_str.strip() or "paste_here" in cookie_str:
-                errors.append("GLASSDOOR_COOKIE is empty or not set correctly.")
-            if not user_agent or not user_agent.strip():
-                errors.append("GLASSDOOR_USER_AGENT is empty or missing.")
-            if not groq_api or not groq_api.strip():
-                errors.append("GROQ_API is missing from .env.")
-                
-            if errors:
-                print("\n" + "="*50)
-                print("[ERROR] .env Validation Failed:")
-                for err in errors:
-                    print(f"  - {err}")
-                print("="*50)
-                print("Krupaya variables thik kara ani parat enter press kara.")
-            else:
-                print("\n[SUCCESS] .env validation successful! Glassdoor credentials loaded.")
-                break
+    res = run_playwright_login()
+    if res:
+        cookie_str, user_agent = res
             
     if cookie_str and user_agent:
-        if choice == "1":
-            update_env_file("GLASSDOOR_COOKIE", f"'{cookie_str}'")
-            update_env_file("GLASSDOOR_USER_AGENT", f"'{user_agent}'")
-            print("\n[SUCCESS] Glassdoor session .env madhe save zali aahe!")
+        update_env_file("GLASSDOOR_COOKIE", f"'{cookie_str}'")
+        update_env_file("GLASSDOOR_USER_AGENT", f"'{user_agent}'")
+        print("\n[SUCCESS] Glassdoor session .env madhe save zali aahe!")
             
         load_dotenv(override=True)
         from src.config import Config

@@ -135,21 +135,12 @@ def check_and_login():
     print("\n" + "="*50)
     print("LINKEDIN LOGIN REQUIRED")
     print("="*50)
-    print("1. Playwright Auto-Login (Real Chrome open karel)")
-    print("2. Direct Cookie")
+    print("[INFO] Playwright Auto-Login start hot aahe (Real Chrome open karel)...")
     
-    try:
-        choice = input("Option select kara (1/2, default 1): ").strip()
-    except EOFError:
-        choice = "1"
-        
-    if not choice:
-        choice = "1"
-        
     cookie_str = None
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
-    if choice == "1" and not force_login:
+    if not force_login:
         session_dir = os.path.abspath("./playwright_linkedin_session")
         if os.path.exists(session_dir):
             try:
@@ -157,32 +148,9 @@ def check_and_login():
             except Exception:
                 pass
 
-    if choice == "1":
-        res = run_playwright_login()
-        if res:
-            cookie_str, user_agent = res
-    elif choice == "2":
-        print("\n" + "-"*50)
-        print("STEPS TO GET LINKEDIN COOKIE:")
-        print("-"*50)
-        print("1. Open your web browser (Chrome, Firefox, Safari, etc.).")
-        print("2. Go to https://www.linkedin.com and log in to your account.")
-        print("3. Press F12 (or right-click anywhere and select 'Inspect') to open Developer Tools.")
-        print("4. Go to the 'Application' tab (on Chrome/Edge) or 'Storage' tab (on Firefox).")
-        print("5. Under the left sidebar, expand 'Cookies' and select 'https://www.linkedin.com'.")
-        print("6. Look for the cookie named 'li_at' in the list.")
-        print("7. Double-click its Value, copy it, and paste it below.")
-        print("-"*50)
-        
-        try:
-            li_at = input("\nPlease paste the 'li_at' cookie value here: ").strip()
-        except EOFError:
-            li_at = ""
-        if li_at:
-            if "li_at=" in li_at:
-                cookie_str = li_at
-            else:
-                cookie_str = f"li_at={li_at}"
+    res = run_playwright_login()
+    if res:
+        cookie_str, user_agent = res
             
     if cookie_str:
         update_env_file("LINKEDIN_COOKIE", f"'{cookie_str}'")
