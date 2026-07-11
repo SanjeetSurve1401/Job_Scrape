@@ -20,6 +20,48 @@ class Job:
     explanation: Optional[str] = None
     ats_score: Optional[str] = None
 
+    def __post_init__(self):
+        import re
+
+        def clean_text(text: str) -> str:
+            if not text:
+                return text
+            
+            # Split by newline first to clean individual lines
+            lines = [line.strip() for line in text.split('\n') if line.strip()]
+            cleaned_lines = []
+            for line in lines:
+                # Check for inline duplication (e.g., "Junior Software DeveloperJunior Software Developer")
+                length = len(line)
+                if length % 2 == 0:
+                    half = length // 2
+                    if line[:half] == line[half:]:
+                        line = line[:half]
+                
+                # Check if words are duplicated
+                words = line.split()
+                w_len = len(words)
+                if w_len % 2 == 0:
+                    half_w = w_len // 2
+                    if words[:half_w] == words[half_w:]:
+                        line = " ".join(words[:half_w])
+                
+                # Remove "with verification" or "verification" if they are visual badge leftovers
+                line = re.sub(r"\bwith verification\b", "", line, flags=re.IGNORECASE).strip()
+                line = re.sub(r"\bverification\b", "", line, flags=re.IGNORECASE).strip()
+                
+                # Standardize spaces
+                line = re.sub(r'\s+', ' ', line).strip()
+                
+                if line and line not in cleaned_lines:
+                    cleaned_lines.append(line)
+            
+            return " ".join(cleaned_lines) if cleaned_lines else ""
+
+        self.title = clean_text(self.title)
+        self.company = clean_text(self.company)
+        self.location = clean_text(self.location)
+
     def dedup_key(self) -> str:
         """
         Generates a deterministic dedup key from title + company + location.
