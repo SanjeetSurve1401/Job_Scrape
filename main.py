@@ -215,42 +215,13 @@ def main():
         print("=" * 60 + "\n")
         args.limit = 25
         
-    # Resolve outputs folder dynamically from execution directory (CWD)
-    outputs_dir = None
-    if not args.output_dir:
-        try:
-            user_outputs_dir = input("Enter directory path to save all outputs (default: ./outputs): ").strip()
-            if not user_outputs_dir:
-                outputs_dir = os.path.abspath("outputs")
-            else:
-                outputs_dir = os.path.abspath(user_outputs_dir)
-        except EOFError:
-            outputs_dir = os.path.abspath("outputs")
-    else:
-        outputs_dir = os.path.abspath(args.output_dir)
+    # Resolve outputs folder at project's root location
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    outputs_dir = os.path.abspath(args.output_dir) if args.output_dir else os.path.join(project_root, "outputs")
     os.makedirs(outputs_dir, exist_ok=True)
 
-    # 1. Resolve Output Path (Bug 1)
-    if not args.output:
-        default_output_path = os.path.join(outputs_dir, "scraped_jobs.json")
-        try:
-            user_output = input(f"Enter path to save the output JSON file (default: {default_output_path}): ").strip()
-            if not user_output:
-                args.output = default_output_path
-            else:
-                if not os.path.dirname(user_output):
-                    args.output = os.path.join(outputs_dir, user_output)
-                else:
-                    args.output = os.path.abspath(user_output)
-        except EOFError:
-            args.output = default_output_path
-    else:
-        if not os.path.dirname(args.output):
-            args.output = os.path.join(outputs_dir, args.output)
-        else:
-            args.output = os.path.abspath(args.output)
-    
-    # Ensure parent directory of output JSON exists
+    # Resolve Output Path to be inside the outputs directory
+    args.output = os.path.abspath(args.output) if args.output else os.path.join(outputs_dir, "scraped_jobs.json")
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     # 2. Resolve CV Path (Bug 2)
