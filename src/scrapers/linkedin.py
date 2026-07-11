@@ -14,8 +14,8 @@ from src.models import Job
 
 @register_scraper
 class LinkedInScraper(BaseScraper):
-    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        print(f"\n[LinkedIn] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
+    def scrape(self, role: str, location: str, experience: str, limit: int = 10, start_offset: int = 0) -> List[Job]:
+        print(f"\n[LinkedIn] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit}, Offset: {start_offset})")
         scraped_jobs = []
         
         # Load storage state from Config
@@ -65,6 +65,8 @@ class LinkedInScraper(BaseScraper):
             query_role = urllib.parse.quote(role)
             query_loc = urllib.parse.quote(location)
             url = f"https://www.linkedin.com/jobs/search/?keywords={query_role}&location={query_loc}"
+            if start_offset > 0:
+                url += f"&start={start_offset}"
             
             print(f"[LinkedIn] Navigating to: {url}")
             try:

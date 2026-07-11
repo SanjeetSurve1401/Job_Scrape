@@ -166,8 +166,8 @@ class GlassdoorScraper(BaseScraper):
 
     # ── Main Scrape Method ───────────────────────────────────────────
 
-    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        print(f"\n[Glassdoor] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
+    def scrape(self, role: str, location: str, experience: str, limit: int = 10, start_offset: int = 0) -> List[Job]:
+        print(f"\n[Glassdoor] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit}, Offset: {start_offset})")
         scraped_jobs = []
         
         # Load storage state from Config
@@ -215,6 +215,9 @@ class GlassdoorScraper(BaseScraper):
             query_role = urllib.parse.quote(role)
             query_loc = urllib.parse.quote(location)
             url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query_role}&locN={query_loc}"
+            if start_offset > 0:
+                page_num = (start_offset // limit) + 1
+                url += f"&p={page_num}"
             
             print(f"[Glassdoor] Navigating to: {url}")
             try:

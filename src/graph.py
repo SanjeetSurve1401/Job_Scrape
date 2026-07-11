@@ -25,26 +25,27 @@ class ScraperState(TypedDict):
     verified_jobs: List[Job]
     processed_jobs_list: List[dict]
     summary_stats: dict
+    start_offset: int
 
 def scrape_linkedin_node(state: ScraperState) -> Dict[str, Any]:
     if "linkedin" not in state["sources"]:
         return {"raw_jobs": []}
     scraper = LinkedInScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"])
+    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
     return {"raw_jobs": jobs}
 
 def scrape_indeed_node(state: ScraperState) -> Dict[str, Any]:
     if "indeed" not in state["sources"]:
         return {"raw_jobs": []}
     scraper = IndeedScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"])
+    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
     return {"raw_jobs": jobs}
 
 def scrape_glassdoor_node(state: ScraperState) -> Dict[str, Any]:
     if "glassdoor" not in state["sources"]:
         return {"raw_jobs": []}
     scraper = GlassdoorScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"])
+    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
     return {"raw_jobs": jobs}
 
 def verify_jobs_node(state: ScraperState) -> Dict[str, Any]:

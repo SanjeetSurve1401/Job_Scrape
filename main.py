@@ -198,6 +198,61 @@ def generate_documents_for_all_jobs(args, outputs_dir):
     except Exception as e:
         print(f"[Error] Failed to run document generation: {e}")
 
+
+def print_jobs_table(output_path: str):
+    """Prints a formatted markdown-style table of all scraped jobs to the console."""
+    if not os.path.exists(output_path):
+        return
+    try:
+        with open(output_path, 'r', encoding='utf-8') as f:
+            jobs = json.load(f)
+        if not jobs:
+            return
+        
+        headers = ["Sr No", "Company", "Role Name", "Platform", "Location", "ATS Score"]
+        col_widths = {h: len(h) for h in headers}
+        
+        rows = []
+        for idx, job in enumerate(jobs, start=1):
+            title = job.get("title", "").replace("\n", " ").replace("\r", " ").strip()
+            # Clean title
+            if len(title) > 35:
+                title = title[:32] + "..."
+                
+            company = job.get("company", "").strip()
+            if len(company) > 20:
+                company = company[:17] + "..."
+                
+            platform = job.get("site", "").strip()
+            location = job.get("location", "").strip()
+            ats_score = job.get("ats_score", "N/A")
+            if ats_score is None:
+                ats_score = "N/A"
+            else:
+                ats_score = str(ats_score).strip()
+                
+            row = [str(idx), company, title, platform, location, ats_score]
+            rows.append(row)
+            for i, val in enumerate(row):
+                h = headers[i]
+                col_widths[h] = max(col_widths[h], len(val))
+                
+        # Build formatting strings for a nice markdown table in cmd
+        format_str = "| " + " | ".join([f"{{:<{col_widths[h]}}}" for h in headers]) + " |"
+        sep_str = "|-" + "-|-".join(["-" * col_widths[h] for h in headers]) + "-|"
+        
+        print("\n" + "=" * 80)
+        print("SCRAPED JOBS SUMMARY TABLE:")
+        print("=" * 80)
+        print(format_str.format(*headers))
+        print(sep_str)
+        for row in rows:
+            print(format_str.format(*row))
+        print("=" * 80 + "\n")
+    except Exception as e:
+        print(f"[Error] Failed to print summary table: {e}")
+
+
 def main():
     # Verify environment variables
     from src.config import Config
@@ -310,6 +365,7 @@ def main():
             print("=" * 60 + "\n")
             
             generate_documents_for_all_jobs(args, outputs_dir)
+            print_jobs_table(args.output)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")
@@ -366,31 +422,81 @@ def main():
     # Build and invoke LangGraph Scraper Graph
     print("\n[Pipeline] Building and running LangGraph pipeline...")
     scraper_graph = build_scraper_graph()
-    initial_state = {
-        "role": args.role,
-        "location": args.location,
-        "experience": args.experience,
-        "limit": args.limit,
-        "groq_model": args.groq_model,
-        "cv_text": cv_text,
-        "sources": selected_sources,
-        "output_path": args.output,
-        "raw_jobs": []
-    }
     
-    graph_result = scraper_graph.invoke(initial_state)
+    all_processed_jobs = []
+    seen_job_urls = set()
+    start_offset = 0
+    iteration = 1
+    max_iterations = 6  # Safety limit to prevent infinite loops
     
-    # Process summary and save outputs
-    stats = graph_result.get("summary_stats", {})
-    total_raw_scraped = stats.get("total_raw", 0)
-    verified_jobs_count = stats.get("total_verified", 0)
-    total_new_inserted = stats.get("new_inserted", 0)
-    total_updated_count = stats.get("updated", 0)
+    total_limit = args.limit or 15
+    total_raw_scraped = 0
+    total_new_inserted = 0
+    total_updated_count = 0
+
+    while len(all_processed_jobs) < total_limit and iteration <= max_iterations:
+        print(f"\n" + "=" * 60)
+        print(f"Scraping Iteration {iteration} (Start Offset: {start_offset})")
+        print(f"Current Verified Jobs Count: {len(all_processed_jobs)} / {total_limit}")
+        print("=" * 60)
+        
+        initial_state = {
+            "role": args.role,
+            "location": args.location,
+            "experience": args.experience,
+            "limit": total_limit,
+            "groq_model": args.groq_model,
+            "cv_text": cv_text,
+            "sources": selected_sources,
+            "output_path": args.output,
+            "raw_jobs": [],
+            "start_offset": start_offset
+        }
+        
+        try:
+            graph_result = scraper_graph.invoke(initial_state)
+            
+            # Collect jobs from this run
+            new_jobs = graph_result.get("processed_jobs_list", [])
+            stats = graph_result.get("summary_stats", {})
+            
+            total_raw_scraped += stats.get("total_raw", 0)
+            total_new_inserted += stats.get("new_inserted", 0)
+            total_updated_count += stats.get("updated", 0)
+            
+            added_this_run = 0
+            for job in new_jobs:
+                url = job.get("url")
+                if url and url not in seen_job_urls:
+                    seen_job_urls.add(url)
+                    all_processed_jobs.append(job)
+                    added_this_run += 1
+                    
+            print(f"\n[Pipeline] Iteration {iteration} finished. Added {added_this_run} new verified jobs.")
+            print(f"[Pipeline] Current total verified jobs: {len(all_processed_jobs)} / {total_limit}")
+            
+            if len(all_processed_jobs) >= total_limit:
+                break
+                
+            if stats.get("total_raw", 0) == 0 and added_this_run == 0:
+                print("[Pipeline] No more raw jobs found from sources. Stopping scraper loop.")
+                break
+                
+            # If we didn't add any new verified jobs, advance start_offset to get next batch of results
+            start_offset += max(stats.get("total_raw", 0), 15)
+            
+        except Exception as graph_err:
+            print(f"[Error] Scraper iteration failed: {graph_err}")
+            break
+            
+        iteration += 1
+
+    # Slice to exactly requested limit
+    processed_jobs = all_processed_jobs[:total_limit]
     
-    print_summary(total_raw_scraped, verified_jobs_count, total_new_inserted, total_updated_count)
+    print_summary(total_raw_scraped, len(processed_jobs), total_new_inserted, total_updated_count)
     
     # Export to output JSON file
-    processed_jobs = graph_result.get("processed_jobs_list", [])
     export_to_json(processed_jobs, args.output)
 
 
@@ -429,6 +535,8 @@ def main():
     else:
         print(f"\n[CV Matcher Info] CV file '{args.cv}' not found. Skipping CV matching.")
         print("To run CV matching, please place your CV PDF file in the root folder (default name: cv.pdf) or specify the path via --cv.")
+    
+    print_jobs_table(args.output)
 
 if __name__ == "__main__":
     main()

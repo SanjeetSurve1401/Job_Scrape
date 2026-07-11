@@ -16,8 +16,8 @@ from src.models import Job
 class IndeedScraper(BaseScraper):
     INDIAN_REGIONS = {"india", "pune", "mumbai", "bangalore", "bengaluru", "delhi", "noida", "gurgaon", "hyderabad", "chennai"}
 
-    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        print(f"\n[Indeed] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
+    def scrape(self, role: str, location: str, experience: str, limit: int = 10, start_offset: int = 0) -> List[Job]:
+        print(f"\n[Indeed] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit}, Offset: {start_offset})")
         scraped_jobs = []
         
         # Load storage state from Config
@@ -69,6 +69,8 @@ class IndeedScraper(BaseScraper):
             query_role = urllib.parse.quote(role)
             query_loc = urllib.parse.quote(location)
             url = f"{base_url}/jobs?q={query_role}&l={query_loc}"
+            if start_offset > 0:
+                url += f"&start={start_offset}"
             
             print(f"[Indeed] Navigating to: {url}")
             try:
