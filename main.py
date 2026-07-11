@@ -26,6 +26,7 @@ def parse_args():
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
     parser.add_argument("--groq-model", type=str, default="llama-3.1-8b-instant", help="Groq model to use for scoring")
     parser.add_argument("--sources", type=str, default="linkedin,glassdoor,indeed", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor,indeed')")
+    parser.add_argument("--apply", type=str, nargs="?", const="all", default=None, help="Automate filling job application form for a specific URL, or 'all' for all scraped jobs")
     return parser.parse_args()
 
 def execute_scraping(scrapers: list, args, limit: int) -> List[Job]:
@@ -207,6 +208,8 @@ def main():
         print("[ERROR] GROQ_API is not set in the .env file. Execution stopped.")
         return
     args = parse_args()
+    
+
     
     # Restrict limit to 25 and warn if it is higher
     if args.limit > 25:
@@ -429,6 +432,146 @@ def main():
     else:
         print(f"\n[CV Matcher Info] CV file '{args.cv}' not found. Skipping CV matching.")
         print("To run CV matching, please place your CV PDF file in the root folder (default name: cv.pdf) or specify the path via --cv.")
+
+    # Retrieve the processed jobs list
+    target_jobs = []
+    if 'processed_jobs' in locals() and processed_jobs:
+        target_jobs = [j for j in processed_jobs if j.get("url")]
+    else:
+        if os.path.exists(args.output):
+            try:
+                with open(args.output, "r", encoding="utf-8") as f:
+                    target_jobs = json.load(f)
+            except Exception:
+                pass
+
+    if args.apply:
+        try:
+            from src.apply.agent import build_apply_graph
+            from src.tailor_cv.generator import sanitize_filename
+            import time
+
+            if args.apply.lower() != "all":
+                filtered_jobs = [j for j in target_jobs if j.get("url") == args.apply]
+                if filtered_jobs:
+                    target_jobs = filtered_jobs
+                else:
+                    target_jobs = [{"url": args.apply}]
+
+            print(f"\n[Pipeline] Running Job Application Automation for {len(target_jobs)} jobs...")
+            graph = build_apply_graph()
+            
+            for idx, job in enumerate(target_jobs, 1):
+                url = job.get("url")
+                title = job.get("title", "Unknown Title")
+                company = job.get("company", "Unknown Company")
+                
+                print("\n" + "=" * 60)
+                print(f"[{idx}/{len(target_jobs)}] Processing Application for: {title} at {company}")
+                print(f"URL: {url}")
+                print("=" * 60)
+                
+                tailored_resume = None
+                tailored_cover_letter = None
+                
+                if "company" in job and "title" in job:
+                    company_clean = sanitize_filename(job["company"])
+                    title_clean = sanitize_filename(job["title"])
+                    folder_name = f"{company_clean}_{title_clean}"
+                    target_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", folder_name)
+                    
+                    cv_pdf_path = os.path.join(target_dir, "tailored_cv.pdf")
+                    cl_pdf_path = os.path.join(target_dir, "cover_letter.pdf")
+                    
+                    if os.path.exists(cv_pdf_path):
+                        tailored_resume = cv_pdf_path
+                        print(f"  - Found tailored resume: {cv_pdf_path}")
+                    if os.path.exists(cl_pdf_path):
+                        tailored_cover_letter = cl_pdf_path
+                        print(f"  - Found tailored cover letter: {cl_pdf_path}")
+                
+                initial_state = {
+                    "url": url,
+                    "profile": {},
+                    "filled_successfully": False,
+                    "status": "Initializing"
+                }
+                if tailored_resume:
+                    initial_state["profile"]["TAILORED_RESUME_PATH"] = tailored_resume
+                if tailored_cover_letter:
+                    initial_state["profile"]["TAILORED_COVER_LETTER_PATH"] = tailored_cover_letter
+                
+                try:
+                    graph.invoke(initial_state)
+                except Exception as run_err:
+                    print(f"[Error] Failed to complete application for {title} at {company}: {run_err}")
+                
+                time.sleep(2)
+        except Exception as e:
+            print(f"[Error] Job application automation failed: {e}")
+    else:
+        # Original request: Open LinkedIn jobs in non-headless browser to view
+        linkedin_jobs = [job for job in target_jobs if job.get("url") and "linkedin.com" in job.get("url", "")]
+        if linkedin_jobs:
+            print("\n" + "=" * 60)
+            print("[LinkedIn] Opening scraped job URLs in non-headless browser (headless=False)...")
+            print("Please close the browser window manually when done to exit.")
+            print("=" * 60)
+            try:
+                from playwright.sync_api import sync_playwright
+                import time
+                import json
+                with sync_playwright() as p:
+                    user_data_dir = os.path.abspath("./playwright_linkedin_session")
+                    storage_state = None
+                    if Config.LINKEDIN_STORAGE_STATE and Config.LINKEDIN_STORAGE_STATE.strip():
+                        try:
+                            storage_state = json.loads(Config.LINKEDIN_STORAGE_STATE)
+                        except Exception as e:
+                            print(f"[LinkedIn Warning] Failed to parse LINKEDIN_STORAGE_STATE: {e}")
+
+                    context = None
+                    browser = None
+                    if storage_state:
+                        browser = p.chromium.launch(headless=False)
+                        context = browser.new_context(
+                            storage_state=storage_state,
+                            user_agent=Config.LINKEDIN_USER_AGENT
+                        )
+                    elif os.path.exists(user_data_dir):
+                        context = p.chromium.launch_persistent_context(
+                            user_data_dir=user_data_dir,
+                            headless=False,
+                            channel="chrome",
+                            args=["--disable-blink-features=AutomationControlled"],
+                            ignore_default_args=["--enable-automation"]
+                        )
+                    else:
+                        browser = p.chromium.launch(headless=False)
+                        context = browser.new_context()
+
+                    for idx, job in enumerate(linkedin_jobs):
+                        url = job.get("url")
+                        if url:
+                            if idx == 0 and len(context.pages) > 0:
+                                page = context.pages[0]
+                            else:
+                                page = context.new_page()
+                            print(f"  - Opening: {job.get('title')} at {job.get('company')} ({url})")
+                            try:
+                                page.goto(url)
+                            except Exception as goto_err:
+                                print(f"  [Error] Failed to load {url}: {goto_err}")
+
+                    while len(context.pages) > 0:
+                        time.sleep(1)
+
+                    if browser:
+                        browser.close()
+                    else:
+                        context.close()
+            except Exception as browser_err:
+                print(f"[Error] Failed to open LinkedIn URLs in browser: {browser_err}")
 
 if __name__ == "__main__":
     main()
