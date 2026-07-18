@@ -50,7 +50,8 @@ Job_Scrape/
         ├── base.py             
         ├── glassdoor.py        # Glassdoor search and offline parsing
         ├── linkedin.py         # LinkedIn scraper using python-jobspy
-        └── indeed.py           # Indeed scraper using python-jobspy
+        ├── indeed.py           # Indeed scraper using python-jobspy
+        └── linkedin_button_checker.py # Checks LinkedIn buttons and extracts JDs
 ```
 
 ---

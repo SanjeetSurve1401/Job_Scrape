@@ -10,7 +10,9 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 # Ensure root directory is in sys.path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if root_dir not in sys.path:
+    sys.path.append(root_dir)
 
 from linkedin_login import check_and_login
 from src.config import Config
@@ -375,7 +377,8 @@ def check_linkedin_buttons(role: str, location: str, limit: int = 5, headless: b
         browser.close()
         
         # Save results to JSON file inside the outputs folder
-        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        output_dir = os.path.join(project_root, "outputs")
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, "linkedin_scraped_jobs.json")
         try:
