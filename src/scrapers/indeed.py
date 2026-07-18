@@ -22,12 +22,20 @@ class IndeedScraper(BaseScraper):
         
         # Load storage state from Config
         storage_state = None
-        if Config.INDEED_STORAGE_STATE and Config.INDEED_STORAGE_STATE.strip():
+        storage_state_env = Config.INDEED_STORAGE_STATE
+        if storage_state_env and storage_state_env.strip():
             try:
-                storage_state = json.loads(Config.INDEED_STORAGE_STATE)
-                print("[Indeed] Loaded storage state from .env settings.")
-            except Exception as e:
-                print(f"[Indeed Warning] Failed to parse INDEED_STORAGE_STATE JSON: {e}")
+                import base64
+                try:
+                    decoded = base64.b64decode(storage_state_env, validate=True).decode("utf-8")
+                    storage_state = json.loads(decoded)
+                except Exception:
+                    if (storage_state_env.startswith("'") and storage_state_env.endswith("'")) or \
+                       (storage_state_env.startswith('"') and storage_state_env.endswith('"')):
+                        storage_state_env = storage_state_env[1:-1]
+                    storage_state = json.loads(storage_state_env)
+            except Exception:
+                print("[Indeed] Storage state in .env is invalid or outdated. Please run 'python indeed_login.py' to login again.")
 
         # Determine domain (Indeed India vs Global)
         loc_lower = location.lower()
@@ -52,7 +60,7 @@ class IndeedScraper(BaseScraper):
                     if not os.path.exists(user_data_dir):
                         print("[Indeed ERROR] No storage state in .env or session directory found! Run indeed_login.py first.")
                         return []
-                    print("[Indeed] Using persistent session directory.")
+                    # Silenced persistent session print
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=user_data_dir,
                         headless=True,

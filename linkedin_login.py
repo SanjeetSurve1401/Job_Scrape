@@ -121,7 +121,7 @@ def check_and_login():
     linkedin_ua = os.getenv("LINKEDIN_USER_AGENT")
     
     if linkedin_storage and linkedin_storage.strip() and linkedin_cookie and linkedin_cookie.strip():
-        print("\nLinkedIn session credentials already exist in .env.")
+        # Session already exists, do not print anything
         return True
 
     print("\n" + "="*50)
@@ -131,10 +131,12 @@ def check_and_login():
     
     res = run_playwright_login()
     if res:
+        import base64
         cookie_str, user_agent, storage_state_str = res
+        storage_state_b64 = base64.b64encode(storage_state_str.encode("utf-8")).decode("utf-8")
         update_env_file("LINKEDIN_COOKIE", f"'{cookie_str}'")
         update_env_file("LINKEDIN_USER_AGENT", f"'{user_agent}'")
-        update_env_file("LINKEDIN_STORAGE_STATE", f"'{storage_state_str}'")
+        update_env_file("LINKEDIN_STORAGE_STATE", storage_state_b64)
         
         print("\n[SUCCESS] LinkedIn session and full storage state saved to .env!")
         load_dotenv(override=True)

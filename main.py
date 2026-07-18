@@ -24,7 +24,8 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=15, help="Total max jobs to scrape across all sources (default: 15)")
     parser.add_argument("--cv", type=str, default=None, help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
-    parser.add_argument("--groq-model", type=str, default="llama-3.1-8b-instant", help="Groq model to use for scoring")
+    parser.add_argument("--groq-model", type=str, default="claude haiku 4.5", help="Claude model to use for scoring")
+    parser.add_argument("--openrouter-model", type=str, default="claude haiku 4.5", help="Claude model to use for tailoring")
     parser.add_argument("--sources", type=str, default="linkedin,glassdoor,indeed", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor,indeed')")
     return parser.parse_args()
 
@@ -69,11 +70,11 @@ def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs
     existing_jobs_updated = 0
     saved_jobs_list = []
 
-    # Instantiate GroqClient if matching is requested
+    # Instantiate ClaudeClient if matching is requested
     client = None
     if cv_text:
-        from src.tailor_cv.groq_client import GroqClient
-        client = GroqClient(model=args.groq_model)
+        from src.tailor_cv.claude_client import ClaudeClient
+        client = ClaudeClient(model=args.groq_model)
 
     from src.database import DatabaseHandler
     is_mongodb = isinstance(db, DatabaseHandler)
@@ -100,7 +101,13 @@ def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs
                 score = res["score"]
                 explanation = res["explanation"]
                 
-                # Respect rate limit between Groq API calls (30 RPM safe)
+                # Capture token usage
+                from src.tailor_cv.claude_client import accumulate_job_tokens
+                job_dict = job.to_dict()
+                accumulate_job_tokens(job_dict, res["usage"])
+                job.tokens_consumed = job_dict.get("tokens_consumed")
+                
+                # Respect rate limit between Claude API calls
                 import time
                 time.sleep(2.0)
                 
@@ -161,46 +168,128 @@ def print_summary(total_scraped: int, verified_count: int, new_inserted: int, up
     print("=" * 60)
 
 def generate_documents_for_all_jobs(args, outputs_dir):
-    print("\n" + "=" * 60)
-    print("GENERATING TAILORED CV AND COVER LETTER FOR EACH JOB POSTING...")
-    print("=" * 60)
     try:
         from src.tailor_cv.generator import generate_tailored_documents
         with open(args.output, 'r', encoding='utf-8') as f:
             jobs_to_process = json.load(f)
         
+        # Find recommended jobs (score > 6)
+        def get_score_key(j):
+            val = j.get("score")
+            try:
+                return int(val) if val is not None else 0
+            except (ValueError, TypeError):
+                return 0
+                
+        recommended = [j for j in jobs_to_process if get_score_key(j) > 6]
+        recommended.sort(key=get_score_key, reverse=True)
+        
+        # Select top args.limit jobs to tailor
+        target_tailor = recommended[:args.limit]
+        
+        print(f"\nTailoring documents for the top {len(target_tailor)} matching jobs (out of {len(jobs_to_process)} total verified)...")
+        
         updated_jobs = []
-        for idx, job in enumerate(jobs_to_process, 1):
+        tailor_idx = 1
+        generation_results = []
+        
+        for idx, job in enumerate(jobs_to_process, start=1):
             title = job.get("title", "Unknown Title")
             company = job.get("company", "Unknown Company")
-            print(f"[{idx}/{len(jobs_to_process)}] Processing documents for '{title}' at '{company}'...")
-            ats_score = generate_tailored_documents(
-                cv_path=args.cv,
-                job=job,
-                model=args.groq_model,
-                output_base_dir=outputs_dir
-            )
-            if ats_score:
-                job["ats_score"] = ats_score
-            updated_jobs.append(job)
             
-            if idx < len(jobs_to_process):
-                import time
-                time.sleep(10.0)
+            is_target = any(
+                j.get("url") == job.get("url") and j.get("title") == job.get("title") 
+                for j in target_tailor
+            )
+            
+            status_str = "Pending"
+            ats_str = "N/A"
+            
+            if is_target:
+                print(f"\n[{tailor_idx}/{len(target_tailor)}] Processing documents for '{title}' at '{company}'...")
+                ats_score = generate_tailored_documents(
+                    cv_path=args.cv,
+                    job=job,
+                    model=args.openrouter_model,
+                    output_base_dir=outputs_dir
+                )
+                if ats_score:
+                    job["ats_score"] = ats_score
+                    ats_str = str(ats_score)
+                    status_str = "Tailored"
+                else:
+                    status_str = "Failed"
+                tailor_idx += 1
                 
-        # Write updated jobs back to the local database file
+                if tailor_idx <= len(target_tailor):
+                    import time
+                    time.sleep(10.0)
+            else:
+                score_val = job.get("score")
+                status_str = f"Skipped (Score {score_val}/10)"
+            
+            generation_results.append({
+                "no": idx,
+                "title": title,
+                "company": company,
+                "status": status_str,
+                "ats_score": ats_str
+            })
+            updated_jobs.append(job)
+                
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(updated_jobs, f, indent=2, ensure_ascii=False)
             
-        print("=" * 60)
-        print("Document generation complete and updated main JSON database.")
-        print("=" * 60 + "\n")
+        headers = ["No", "Job Title", "Company", "Status", "ATS Score"]
+        col_widths = [4, 35, 20, 22, 11]
+        format_str = "| " + " | ".join([f"{{:<{w}}}" for w in col_widths]) + " |"
+        sep_str = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
+        
+        print("\n" + "=" * 90)
+        print("GENERATING TAILORED CV AND COVER LETTER FOR EACH JOB POSTING")
+        print("=" * 90)
+        print(format_str.format(*headers))
+        print(sep_str)
+        for res in generation_results:
+            t_title = res['title'][:32] + "..." if len(res['title']) > 35 else res['title']
+            t_company = res['company'][:17] + "..." if len(res['company']) > 20 else res['company']
+            print(format_str.format(str(res['no']), t_title, t_company, res['status'], res['ats_score']))
+        print("-" * len(sep_str) + "\n")
+        
     except Exception as e:
         print(f"[Error] Failed to run document generation: {e}")
 
 
+def print_match_scores_table(all_results, matched_results):
+    headers = ["No", "Job Title", "Company", "Score"]
+    col_widths = [4, 40, 25, 7]
+    format_str = "| " + " | ".join([f"{{:<{w}}}" for w in col_widths]) + " |"
+    sep_str = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
+    
+    print("\n" + "=" * 90)
+    print("ALL JOB TITLES AND MATCH SCORES (0-10)")
+    print("=" * 90)
+    print(format_str.format(*headers))
+    print(sep_str)
+    for idx, res in enumerate(all_results, 1):
+        t_title = res['title'][:37] + "..." if len(res['title']) > 40 else res['title']
+        t_company = res['company'][:22] + "..." if len(res['company']) > 25 else res['company']
+        score_str = f"{res['score']}/10" if res['score'] is not None else "N/A"
+        print(format_str.format(str(idx), t_title, t_company, score_str))
+    print("-" * len(sep_str) + "\n")
+    
+    print("=" * 90)
+    print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED)")
+    print("=" * 90)
+    if not matched_results:
+        print("No jobs with match score above 6.")
+    else:
+        for res in matched_results:
+            print(f"- {res['title']} ({res['company']})")
+    print("=" * 90 + "\n")
+
 def print_jobs_table(output_path: str):
-    """Prints a formatted markdown-style table of all scraped jobs to the console."""
+    """Prints separate formatted tables for LinkedIn, Glassdoor, and Indeed jobs."""
     if not os.path.exists(output_path):
         return
     try:
@@ -209,46 +298,86 @@ def print_jobs_table(output_path: str):
         if not jobs:
             return
         
-        headers = ["Sr No", "Company", "Role Name", "Platform", "Location", "ATS Score"]
-        col_widths = {h: len(h) for h in headers}
-        
-        rows = []
-        for idx, job in enumerate(jobs, start=1):
-            title = job.get("title", "").replace("\n", " ").replace("\r", " ").strip()
-            # Clean title
-            if len(title) > 35:
-                title = title[:32] + "..."
+        # Group jobs by platform (case-insensitive)
+        platform_jobs = {}
+        for job in jobs:
+            platform = job.get("site", "Unknown").strip()
+            platform_lower = platform.lower()
+            if platform_lower not in platform_jobs:
+                platform_jobs[platform_lower] = []
+            platform_jobs[platform_lower].append(job)
+            
+        # Display order
+        platform_order = ["linkedin", "glassdoor", "indeed"]
+        # Add other platforms if found
+        for p in platform_jobs:
+            if p not in platform_order:
+                platform_order.append(p)
                 
-            company = job.get("company", "").strip()
-            if len(company) > 20:
-                company = company[:17] + "..."
+        for p_key in platform_order:
+            if p_key not in platform_jobs or not platform_jobs[p_key]:
+                continue
                 
-            platform = job.get("site", "").strip()
-            location = job.get("location", "").strip()
-            ats_score = job.get("ats_score", "N/A")
-            if ats_score is None:
-                ats_score = "N/A"
-            else:
-                ats_score = str(ats_score).strip()
+            jobs_list = platform_jobs[p_key]
+            platform_name = jobs_list[0].get("site", p_key.title()).strip()
+            
+            # Print Table Header
+            title_text = f"{platform_name} Jobs"
+            border = "-" * max(30, len(title_text))
+            print(f"\n{border}")
+            print(title_text)
+            print(border)
+            
+            headers = ["Sr No", "Job Role", "Company", "Location", "Experience", "Score", "Count In"]
+            col_widths = {h: len(h) for h in headers}
+            
+            rows = []
+            for idx, job in enumerate(jobs_list, start=1):
+                title = job.get("title", "").replace("\n", " ").replace("\r", " ").strip()
+                if len(title) > 30:
+                    title = title[:27] + "..."
+                    
+                company = job.get("company", "").strip()
+                if len(company) > 20:
+                    company = company[:17] + "..."
+                    
+                location = job.get("location", "").strip()
+                if len(location) > 15:
+                    location = location[:12] + "..."
+                    
+                exp = job.get("experience_required")
+                if exp is None:
+                    exp = "N/A"
+                exp = str(exp).strip()
+                if len(exp) > 15:
+                    exp = exp[:12] + "..."
+                    
+                score_val = job.get("score")
+                score_str = f"{score_val}/10" if score_val is not None else "N/A"
                 
-            row = [str(idx), company, title, platform, location, ats_score]
-            rows.append(row)
-            for i, val in enumerate(row):
-                h = headers[i]
-                col_widths[h] = max(col_widths[h], len(val))
+                try:
+                    is_above_6 = score_val is not None and int(score_val) > 6
+                except (ValueError, TypeError):
+                    is_above_6 = False
+                    
+                count_in = "✓" if is_above_6 else ""
                 
-        # Build formatting strings for a nice markdown table in cmd
-        format_str = "| " + " | ".join([f"{{:<{col_widths[h]}}}" for h in headers]) + " |"
-        sep_str = "|-" + "-|-".join(["-" * col_widths[h] for h in headers]) + "-|"
-        
-        print("\n" + "=" * 80)
-        print("SCRAPED JOBS SUMMARY TABLE:")
-        print("=" * 80)
-        print(format_str.format(*headers))
-        print(sep_str)
-        for row in rows:
-            print(format_str.format(*row))
-        print("=" * 80 + "\n")
+                row = [str(idx), title, company, location, exp, score_str, count_in]
+                rows.append(row)
+                for i, val in enumerate(row):
+                    h = headers[i]
+                    col_widths[h] = max(col_widths[h], len(val))
+                    
+            # Build formatting strings for a nice table
+            format_str = "| " + " | ".join([f"{{:<{col_widths[h]}}}" for h in headers]) + " |"
+            sep_str = "|-" + "-|-".join(["-" * col_widths[h] for h in headers]) + "-|"
+            
+            print(format_str.format(*headers))
+            print(sep_str)
+            for row in rows:
+                print(format_str.format(*row))
+            print("-" * len(sep_str) + "\n")
+            
     except Exception as e:
         print(f"[Error] Failed to print summary table: {e}")
 
@@ -257,10 +386,11 @@ def main():
     # Verify environment variables
     from src.config import Config
     
-    # 1. Check Groq API
-    if not Config.GROQ_API or not Config.GROQ_API.strip():
-        print("[ERROR] GROQ_API is not set in the .env file. Execution stopped.")
+    # Check Claude API
+    if not Config.CLAUDE_API or not Config.CLAUDE_API.strip():
+        print("[ERROR] CLAUDE_API is not set in the .env file. Execution stopped.")
         return
+        
     args = parse_args()
     
     # Restrict limit to 25 and warn if it is higher
@@ -316,9 +446,7 @@ def main():
     # Extract CV text (since we guaranteed the CV file exists and is valid)
     try:
         from src.tailor_cv.pdf_parser import extract_text_from_pdf
-        print(f"\n[CV Matcher] Extracting text from CV: {args.cv}...")
         cv_text = extract_text_from_pdf(args.cv)
-        print(f"[CV Matcher] Extracted {len(cv_text)} characters from CV.")
     except Exception as e:
         print(f"[Error] Failed to extract text from CV: {e}")
     
@@ -345,27 +473,10 @@ def main():
                 model=args.groq_model
             )
             
-            # Print general/all scores
-            print("\n" + "=" * 60)
-            print("ALL JOB TITLES AND MATCH SCORES (0-10):")
-            print("=" * 60)
-            for res in all_results:
-                print(f"- {res['title']} ({res['company']}) - Score: {res['score']}/10")
-                print(f"  Explanation: {res['explanation']}")
+            print_match_scores_table(all_results, matched_results)
             
-            # Print match score > 6
-            print("\n" + "=" * 60)
-            print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED):")
-            print("=" * 60)
-            if not matched_results:
-                print("No jobs with match score above 6.")
-            else:
-                for res in matched_results:
-                    print(f"- {res['title']}")
-            print("=" * 60 + "\n")
-            
-            generate_documents_for_all_jobs(args, outputs_dir)
             print_jobs_table(args.output)
+            generate_documents_for_all_jobs(args, outputs_dir)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")
@@ -491,8 +602,8 @@ def main():
             
         iteration += 1
 
-    # Slice to exactly requested limit
-    processed_jobs = all_processed_jobs[:total_limit]
+    # Keep all scraped and verified jobs instead of slicing by limit
+    processed_jobs = all_processed_jobs
     
     print_summary(total_raw_scraped, len(processed_jobs), total_new_inserted, total_updated_count)
     
@@ -509,25 +620,8 @@ def main():
                 model=args.groq_model
             )
             
-            # Print general/all scores
-            print("\n" + "=" * 60)
-            print("ALL JOB TITLES AND MATCH SCORES (0-10):")
-            print("=" * 60)
-            for res in all_results:
-                print(f"- {res['title']} ({res['company']}) - Score: {res['score']}/10")
-                print(f"  Explanation: {res['explanation']}")
-            
-            # Print match score > 6
-            print("\n" + "=" * 60)
-            print("JOBS WITH MATCH SCORE > 6 (RECOMMENDED):")
-            print("=" * 60)
-            if not matched_results:
-                print("No jobs with match score above 6.")
-            else:
-                for res in matched_results:
-                    print(f"- {res['title']}")
-            print("=" * 60 + "\n")
-            
+            print_match_scores_table(all_results, matched_results)
+            print_jobs_table(args.output)
             generate_documents_for_all_jobs(args, outputs_dir)
             
         except Exception as e:

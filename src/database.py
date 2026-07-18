@@ -57,6 +57,8 @@ class DatabaseHandler(DatabaseInterface):
                 update_fields["explanation"] = job.explanation
             if hasattr(job, "ats_score") and job.ats_score is not None:
                 update_fields["ats_score"] = job.ats_score
+            if hasattr(job, "tokens_consumed") and job.tokens_consumed is not None:
+                update_fields["tokens_consumed"] = job.tokens_consumed
 
             # Perform single round-trip update and fetch
             updated_doc = self.collection.find_one_and_update(
@@ -135,9 +137,15 @@ class LocalDatabaseHandler(DatabaseInterface):
                     job_id TEXT,
                     score INTEGER,
                     explanation TEXT,
-                    ats_score TEXT
+                    ats_score TEXT,
+                    tokens_consumed TEXT
                 )
             """)
+            try:
+                self.cursor.execute("ALTER TABLE jobs ADD COLUMN tokens_consumed TEXT")
+                self.conn.commit()
+            except Exception:
+                pass
             self.conn.commit()
             print(f"Initialized local SQLite database fallback at '{self.filename}'.")
         except Exception as e:
@@ -174,12 +182,25 @@ class LocalDatabaseHandler(DatabaseInterface):
             explanation_val = job.explanation if (hasattr(job, "explanation") and job.explanation) else existing_doc.get("explanation")
             ats_score_val = job.ats_score if (hasattr(job, "ats_score") and job.ats_score is not None) else existing_doc.get("ats_score")
 
+            new_tokens = job.tokens_consumed if (hasattr(job, "tokens_consumed") and job.tokens_consumed) else None
+            existing_tokens = existing_doc.get("tokens_consumed")
+            if isinstance(existing_tokens, str):
+                try:
+                    existing_tokens = json.loads(existing_tokens)
+                except Exception:
+                    existing_tokens = None
+            
+            merged_tokens = existing_tokens or {}
+            if new_tokens:
+                merged_tokens.update(new_tokens)
+            tokens_val = json.dumps(merged_tokens) if merged_tokens else None
+
             try:
                 self.cursor.execute(
                     """UPDATE jobs 
-                       SET site = ?, about_job = ?, salary = ?, url = ?, score = ?, explanation = ?, ats_score = ?
+                       SET site = ?, about_job = ?, salary = ?, url = ?, score = ?, explanation = ?, ats_score = ?, tokens_consumed = ?
                        WHERE dedup_key = ?""",
-                    (merged_sites_str, about_val, salary_val, url_val, score_val, explanation_val, ats_score_val, dedup_key)
+                    (merged_sites_str, about_val, salary_val, url_val, score_val, explanation_val, ats_score_val, tokens_val, dedup_key)
                 )
                 self.conn.commit()
             except Exception as e:
@@ -200,17 +221,19 @@ class LocalDatabaseHandler(DatabaseInterface):
                 "job_id": job.job_id or existing_doc.get("job_id"),
                 "score": score_val,
                 "explanation": explanation_val,
-                "ats_score": ats_score_val
+                "ats_score": ats_score_val,
+                "tokens_consumed": merged_tokens if merged_tokens else None
             }
             return False, updated_doc
         else:
             # Insert new job
             site_str = ", ".join(job.site) if isinstance(job.site, list) else job.site
             job_dict = job.to_dict()
+            tokens_val = json.dumps(job.tokens_consumed) if (hasattr(job, "tokens_consumed") and job.tokens_consumed) else None
             try:
                 self.cursor.execute(
-                    """INSERT INTO jobs (dedup_key, title, company, location, about_job, site, url, salary, experience_required, scraped_at, job_id, score, explanation, ats_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO jobs (dedup_key, title, company, location, about_job, site, url, salary, experience_required, scraped_at, job_id, score, explanation, ats_score, tokens_consumed)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         dedup_key,
                         title,
@@ -225,7 +248,8 @@ class LocalDatabaseHandler(DatabaseInterface):
                         job.job_id,
                         job.score,
                         job.explanation,
-                        job.ats_score
+                        job.ats_score,
+                        tokens_val
                     )
                 )
                 self.conn.commit()
@@ -239,11 +263,17 @@ class LocalDatabaseHandler(DatabaseInterface):
         """Finds a job by its deduplication key in the SQLite database."""
         try:
             self.cursor.execute(
-                "SELECT dedup_key, title, company, location, about_job, site, url, salary, experience_required, scraped_at, job_id, score, explanation, ats_score FROM jobs WHERE dedup_key = ?",
+                "SELECT dedup_key, title, company, location, about_job, site, url, salary, experience_required, scraped_at, job_id, score, explanation, ats_score, tokens_consumed FROM jobs WHERE dedup_key = ?",
                 (dedup_key,)
             )
             row = self.cursor.fetchone()
             if row:
+                tokens_data = None
+                if len(row) > 14 and row[14]:
+                    try:
+                        tokens_data = json.loads(row[14])
+                    except Exception:
+                        tokens_data = None
                 return {
                     "_id": row[0],
                     "title": row[1],
@@ -258,7 +288,8 @@ class LocalDatabaseHandler(DatabaseInterface):
                     "job_id": row[10],
                     "score": row[11],
                     "explanation": row[12],
-                    "ats_score": row[13]
+                    "ats_score": row[13],
+                    "tokens_consumed": tokens_data
                 }
         except Exception as e:
             print(f"[Warning] Failed to fetch job from SQLite database: {e}")
@@ -269,10 +300,16 @@ class LocalDatabaseHandler(DatabaseInterface):
         jobs_list = []
         try:
             self.cursor.execute(
-                "SELECT dedup_key, title, company, location, about_job, site, url, salary, experience_required, scraped_at, job_id, score, explanation, ats_score FROM jobs"
+                "SELECT dedup_key, title, company, location, about_job, site, url, salary, experience_required, scraped_at, job_id, score, explanation, ats_score, tokens_consumed FROM jobs"
             )
             rows = self.cursor.fetchall()
             for row in rows:
+                tokens_data = None
+                if len(row) > 14 and row[14]:
+                    try:
+                        tokens_data = json.loads(row[14])
+                    except Exception:
+                        tokens_data = None
                 jobs_list.append({
                     "_id": row[0],
                     "title": row[1],
@@ -287,7 +324,8 @@ class LocalDatabaseHandler(DatabaseInterface):
                     "job_id": row[10],
                     "score": row[11],
                     "explanation": row[12],
-                    "ats_score": row[13]
+                    "ats_score": row[13],
+                    "tokens_consumed": tokens_data
                 })
         except Exception as e:
             print(f"[Warning] Failed to retrieve all jobs from SQLite database: {e}")

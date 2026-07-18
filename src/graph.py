@@ -10,7 +10,7 @@ from src.scrapers.indeed import IndeedScraper
 from src.scrapers.glassdoor import GlassdoorScraper
 from src.verifier import JobVerifier
 from src.database import DatabaseHandler, LocalDatabaseHandler
-from src.tailor_cv.groq_client import GroqClient
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
 
 class ScraperState(TypedDict):
     role: str
@@ -76,11 +76,11 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
     processed_jobs = []
     
     client = None
-    if cv_text and Config.GROQ_API and Config.GROQ_API.strip():
+    if cv_text and Config.CLAUDE_API and Config.CLAUDE_API.strip():
         try:
-            client = GroqClient(model=state.get("groq_model", "llama-3.1-8b-instant"))
+            client = ClaudeClient(model=state.get("groq_model", "claude-3-5-haiku-20241022"))
         except Exception as e:
-            print(f"[LangGraph Score Node Error] Failed to initialize Groq Client: {e}")
+            print(f"[LangGraph Score Node Error] Failed to initialize Claude Client: {e}")
             
     for job in verified_jobs:
         job_dict = job.to_dict()
@@ -90,7 +90,12 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
                 res = client.get_match_score(cv_text, job_dict)
                 job_dict["score"] = res["score"]
                 job_dict["explanation"] = res["explanation"]
+                accumulate_job_tokens(job_dict, res["usage"])
                 print(f"    -> Score: {res['score']}/10")
+                
+                # Respect rate limit
+                import time
+                time.sleep(2.0)
             except Exception as e:
                 print(f"    -> Scoring failed: {e}")
                 job_dict["score"] = 0
@@ -144,6 +149,8 @@ def save_jobs_node(state: ScraperState) -> Dict[str, Any]:
             job_obj.score = job_dict["score"]
         if "explanation" in job_dict:
             job_obj.explanation = job_dict["explanation"]
+        if "tokens_consumed" in job_dict:
+            job_obj.tokens_consumed = job_dict["tokens_consumed"]
             
         is_new, saved_doc = db.save_job(job_obj)
         if is_new:

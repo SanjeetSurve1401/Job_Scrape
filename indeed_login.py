@@ -119,7 +119,7 @@ def check_and_login_indeed():
     indeed_ua = os.getenv("INDEED_USER_AGENT")
     
     if indeed_storage and indeed_storage.strip() and indeed_cookie and indeed_cookie.strip():
-        print("\nIndeed session credentials already exist in .env.")
+        # Session already exists, do not print anything
         return True
 
     print("\n" + "="*50)
@@ -129,10 +129,12 @@ def check_and_login_indeed():
     
     res = run_playwright_login()
     if res:
+        import base64
         cookie_str, user_agent, storage_state_str = res
+        storage_state_b64 = base64.b64encode(storage_state_str.encode("utf-8")).decode("utf-8")
         update_env_file("INDEED_COOKIE", f"'{cookie_str}'")
         update_env_file("INDEED_USER_AGENT", f"'{user_agent}'")
-        update_env_file("INDEED_STORAGE_STATE", f"'{storage_state_str}'")
+        update_env_file("INDEED_STORAGE_STATE", storage_state_b64)
         
         print("\n[SUCCESS] Indeed session and full storage state saved to .env!")
         load_dotenv(override=True)

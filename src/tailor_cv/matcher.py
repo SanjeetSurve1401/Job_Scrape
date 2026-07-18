@@ -2,13 +2,13 @@ import os
 import json
 from typing import List, Dict, Any, Tuple
 from src.tailor_cv.pdf_parser import extract_text_from_pdf
-from src.tailor_cv.groq_client import GroqClient
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
 
 def run_cv_matching(
     cv_path: str,
     jobs_json_path: str,
     api_key: str = None,
-    model: str = "llama-3.1-8b-instant"
+    model: str = "claude-3-5-haiku-20241022"
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Reads the CV from a PDF file, loops over job details in a JSON file,
@@ -25,24 +25,28 @@ def run_cv_matching(
         raise FileNotFoundError(f"Scraped jobs file not found at: {jobs_json_path}")
     
     # 1. Convert CV PDF to text
-    print(f"\n[CV Matcher] Extracting text from CV: {cv_path}...")
     cv_text = extract_text_from_pdf(cv_path)
-    print(f"[CV Matcher] Extracted {len(cv_text)} characters from CV.")
     
     # 2. Load jobs
-    print(f"[CV Matcher] Loading jobs from {jobs_json_path}...")
     with open(jobs_json_path, 'r', encoding='utf-8') as f:
         jobs = json.load(f)
-    print(f"[CV Matcher] Loaded {len(jobs)} jobs.")
     
-    # 3. Initialize Groq Client
-    client = GroqClient(api_key=api_key, model=model)
+    # 3. Initialize Claude Client
+    client = ClaudeClient(api_key=api_key, model=model)
     
     all_results = []
     matched_results = []
     
-    print("\n[CV Matcher] Evaluating jobs against CV using LLM...")
-    print("=" * 60)
+    headers = ["No", "Job Title", "Company", "Status", "Score"]
+    col_widths = [4, 35, 20, 18, 7]
+    format_str = "| " + " | ".join([f"{{:<{w}}}" for w in col_widths]) + " |"
+    sep_str = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
+    
+    print("\n" + "=" * 90)
+    print("EVALUATING JOBS AGAINST CV USING LLM")
+    print("=" * 90)
+    print(format_str.format(*headers))
+    print(sep_str)
     
     for idx, job in enumerate(jobs, 1):
         title = job.get("title", "Unknown Title")
@@ -53,11 +57,11 @@ def run_cv_matching(
         existing_explanation = job.get("explanation")
         
         if existing_score is not None and existing_explanation:
-            print(f"[{idx}/{len(jobs)}] Skipping (Cached): '{title}' at {company} -> Score: {existing_score}/10")
+            status_str = "Skipping (Cached)"
             score = existing_score
             explanation = existing_explanation
         else:
-            print(f"[{idx}/{len(jobs)}] Scoring (API Call): '{title}' at {company}...")
+            status_str = "Scored (API Call)"
             
             # Get score from LLM
             res = client.get_match_score(cv_text, job)
@@ -67,6 +71,7 @@ def run_cv_matching(
             # Save score and explanation back to job dictionary
             job["score"] = score
             job["explanation"] = explanation
+            accumulate_job_tokens(job, res["usage"])
             
             # Write updated jobs back to JSON file immediately
             try:
@@ -79,6 +84,12 @@ def run_cv_matching(
             if idx < len(jobs):
                 import time
                 time.sleep(6.0)
+                
+        # Truncate strings to fit columns
+        t_title = title[:32] + "..." if len(title) > 35 else title
+        t_company = company[:17] + "..." if len(company) > 20 else company
+        score_str = f"{score}/10" if score is not None else "Pending"
+        print(format_str.format(str(idx), t_title, t_company, status_str, score_str))
         
         job_result = {
             "sr_no": job.get("sr_no", idx),
@@ -94,7 +105,6 @@ def run_cv_matching(
         if score > 6:
             matched_results.append(job_result)
             
-    print("=" * 60)
-    print("[CV Matcher] Evaluation complete.\n")
+    print("-" * len(sep_str) + "\n")
     
     return all_results, matched_results

@@ -20,12 +20,20 @@ class LinkedInScraper(BaseScraper):
         
         # Load storage state from Config
         storage_state = None
-        if Config.LINKEDIN_STORAGE_STATE and Config.LINKEDIN_STORAGE_STATE.strip():
+        storage_state_env = Config.LINKEDIN_STORAGE_STATE
+        if storage_state_env and storage_state_env.strip():
             try:
-                storage_state = json.loads(Config.LINKEDIN_STORAGE_STATE)
-                print("[LinkedIn] Loaded storage state from .env settings.")
-            except Exception as e:
-                print(f"[LinkedIn Warning] Failed to parse LINKEDIN_STORAGE_STATE JSON: {e}")
+                import base64
+                try:
+                    decoded = base64.b64decode(storage_state_env, validate=True).decode("utf-8")
+                    storage_state = json.loads(decoded)
+                except Exception:
+                    if (storage_state_env.startswith("'") and storage_state_env.endswith("'")) or \
+                       (storage_state_env.startswith('"') and storage_state_env.endswith('"')):
+                        storage_state_env = storage_state_env[1:-1]
+                    storage_state = json.loads(storage_state_env)
+            except Exception:
+                print("[LinkedIn] Storage state in .env is invalid or outdated. Please run 'python linkedin_login.py' to login again.")
                 
         user_data_dir = os.path.abspath("./playwright_linkedin_session")
         
@@ -47,7 +55,7 @@ class LinkedInScraper(BaseScraper):
                     if not os.path.exists(user_data_dir):
                         print("[LinkedIn ERROR] No storage state in .env or session directory found! Run linkedin_login.py first.")
                         return []
-                    print("[LinkedIn] Using persistent session directory.")
+                    # Silenced persistent session print
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=user_data_dir,
                         headless=True,
@@ -82,21 +90,24 @@ class LinkedInScraper(BaseScraper):
                         context.close()
                     return []
                 
-                page.wait_for_selector(".scaffold-layout__list-container, .jobs-search-results-list", timeout=15000)
+                page.wait_for_selector(
+                    ".scaffold-layout__list-container, .jobs-search-results-list, li.jobs-search-results__list-item, div.job-card-container, [data-occludable-job-id]",
+                    timeout=5000
+                )
             except Exception as e:
-                print(f"[LinkedIn] Warning: job list selector not found or timeout: {e}")
+                pass
                 
             # Scroll the job list pane to load more items
             try:
                 pane_selector = ".jobs-search-results-list, .jobs-search-results-list__container"
                 pane = page.locator(pane_selector).first
-                if pane:
+                if pane.count() > 0:
                     print("[LinkedIn] Scrolling job list to load more jobs...")
                     for _ in range(5):
                         pane.evaluate("el => el.scrollTop = el.scrollHeight")
                         page.wait_for_timeout(1000)
             except Exception as scroll_error:
-                print(f"[LinkedIn] Scroll failed: {scroll_error}")
+                pass
 
             # Extract job cards
             html = page.content()
