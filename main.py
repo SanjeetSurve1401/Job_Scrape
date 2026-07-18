@@ -24,10 +24,17 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=15, help="Total max jobs to scrape across all sources (default: 15)")
     parser.add_argument("--cv", type=str, default=None, help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
-    parser.add_argument("--groq-model", type=str, default="claude haiku 4.5", help="Claude model to use for scoring")
-    parser.add_argument("--openrouter-model", type=str, default="claude haiku 4.5", help="Claude model to use for tailoring")
+    parser.add_argument("--claude-model", type=str, default="claude haiku 4.5", help="Claude model to use for matching and tailoring")
+    parser.add_argument("--groq-model", type=str, default=None, help="Deprecated: Use --claude-model instead")
+    parser.add_argument("--openrouter-model", type=str, default=None, help="Deprecated: Use --claude-model instead")
     parser.add_argument("--sources", type=str, default="linkedin,glassdoor,indeed", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor,indeed')")
-    return parser.parse_args()
+    
+    args = parser.parse_args()
+    if not args.groq_model:
+        args.groq_model = args.claude_model
+    if not args.openrouter_model:
+        args.openrouter_model = args.claude_model
+    return args
 
 def execute_scraping(scrapers: list, args, limit: int) -> List[Job]:
     """Runs all discovered scrapers in parallel and collects raw jobs, distributing the limit."""
