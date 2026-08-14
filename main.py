@@ -24,8 +24,7 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=15, help="Total max jobs to scrape across all sources (default: 15)")
     parser.add_argument("--cv", type=str, default=None, help="Path to your CV PDF file")
     parser.add_argument("--match-only", action="store_true", help="Only run CV matching on existing scraped jobs json file")
-    parser.add_argument("--groq-model", type=str, default="claude haiku 4.5", help="Claude model to use for scoring")
-    parser.add_argument("--openrouter-model", type=str, default="claude haiku 4.5", help="Claude model to use for tailoring")
+    parser.add_argument("--model", type=str, default="claude haiku 4.5", help="Claude model to use for scoring and tailoring")
     parser.add_argument("--sources", type=str, default="linkedin,glassdoor,indeed", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor,indeed')")
     return parser.parse_args()
 
@@ -74,7 +73,7 @@ def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs
     client = None
     if cv_text:
         from src.tailor_cv.claude_client import ClaudeClient
-        client = ClaudeClient(model=args.groq_model)
+        client = ClaudeClient(model=args.model)
 
     from src.database import DatabaseHandler
     is_mongodb = isinstance(db, DatabaseHandler)
@@ -210,7 +209,7 @@ def generate_documents_for_all_jobs(args, outputs_dir):
                 ats_score = generate_tailored_documents(
                     cv_path=args.cv,
                     job=job,
-                    model=args.openrouter_model,
+                    model=args.model,
                     output_base_dir=outputs_dir
                 )
                 if ats_score:
@@ -470,7 +469,7 @@ def main():
             all_results, matched_results = run_cv_matching(
                 cv_path=args.cv,
                 jobs_json_path=args.output,
-                model=args.groq_model
+                model=args.model
             )
             
             print_match_scores_table(all_results, matched_results)
@@ -556,7 +555,7 @@ def main():
             "location": args.location,
             "experience": args.experience,
             "limit": total_limit,
-            "groq_model": args.groq_model,
+            "model": args.model,
             "cv_text": cv_text,
             "sources": selected_sources,
             "output_path": args.output,
@@ -617,7 +616,7 @@ def main():
             all_results, matched_results = run_cv_matching(
                 cv_path=args.cv,
                 jobs_json_path=args.output,
-                model=args.groq_model
+                model=args.model
             )
             
             print_match_scores_table(all_results, matched_results)

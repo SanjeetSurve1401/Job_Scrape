@@ -17,7 +17,7 @@ class ScraperState(TypedDict):
     location: str
     experience: str
     limit: int
-    groq_model: str
+    model: str
     cv_text: str
     sources: List[str]
     output_path: str
@@ -78,7 +78,7 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
     client = None
     if cv_text and Config.CLAUDE_API and Config.CLAUDE_API.strip():
         try:
-            client = ClaudeClient(model=state.get("groq_model", "claude-3-5-haiku-20241022"))
+            client = ClaudeClient(model=state.get("model", "claude-3-5-haiku-20241022"))
         except Exception as e:
             print(f"[LangGraph Score Node Error] Failed to initialize Claude Client: {e}")
             
