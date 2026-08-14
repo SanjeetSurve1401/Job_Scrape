@@ -275,12 +275,18 @@ class GlassdoorScraper(BaseScraper):
                 job_details = jobview.get("job", {})
                 
                 title = header.get("jobTitleText") or job_details.get("jobTitleText") or ""
+                if title:
+                    title = " ".join(str(title).split())
                 
                 company = header.get("employerNameFromSearch") or ""
                 if not company and "employer" in header:
                     company = header["employer"].get("name") or header["employer"].get("shortName") or ""
+                if company:
+                    company = " ".join(str(company).split())
                 
                 location_name = header.get("locationName", "")
+                if location_name:
+                    location_name = " ".join(str(location_name).split())
                 
                 url = header.get("seoJobLink") or ""
                 if url and not url.startswith("http"):

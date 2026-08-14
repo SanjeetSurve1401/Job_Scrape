@@ -146,13 +146,18 @@ class LinkedInScraper(BaseScraper):
                     title = title_elem.get_text().strip() if title_elem else ""
                     if not title and link_elem:
                         title = link_elem.get_text().strip()
+                    if title:
+                        title = title.split("\n")[0].strip()
+                        title = " ".join(title.split())
                         
                     company_elem = card.select_one(".job-card-container__company-name, .job-card-container__primary-description, .artdeco-entity-lockup__subtitle")
                     company = company_elem.get_text().strip() if company_elem else ""
                     company = company.split("\n")[0].strip()
+                    company = " ".join(company.split())
                     
                     loc_elem = card.select_one(".job-card-container__metadata-item, .job-card-container__primary-description")
                     loc_name = loc_elem.get_text().strip() if loc_elem else location
+                    loc_name = " ".join(loc_name.split())
                     
                     job_url = f"https://www.linkedin.com/jobs/view/{job_id}"
                     

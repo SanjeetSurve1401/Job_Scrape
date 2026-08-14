@@ -2,7 +2,7 @@
 
 An advanced, enterprise-grade job scraping and document tailoring engine built with a **LangGraph Parallel Pipeline**, **Playwright Session Preservation**, and the **Claude API**. 
 
-This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed** concurrently in parallel, filters/verifies them using regex constraints, merges duplicates, scores matching inline against a CV using Claude Haiku 4.5, tracks token costs dynamically, and persists matches directly to MongoDB Atlas or a local SQLite database fallback.
+This engine scrapes job postings from **LinkedIn** and **Glassdoor** concurrently in parallel, filters/verifies them using regex constraints, merges duplicates, scores matching inline against a CV using Claude Haiku 4.5, tracks token costs dynamically, and persists matches directly to MongoDB Atlas or a local SQLite database fallback.
 
 [![Database](https://img.shields.io/badge/Database-MongoDB%20%2F%20Local-orange?style=for-the-badge)](#database--local-fallback-modes)
 
@@ -11,7 +11,7 @@ This engine scrapes job postings from **LinkedIn**, **Glassdoor**, and **Indeed*
 ## Key Features & Capabilities
 
 - **LangGraph Parallel Scraper Pipeline**: Coordinates concurrent scraping, deduplication, inline verification, match scoring, and database operations using an orchestrated StateGraph.
-- **Parallel Scraping Concurrency**: Launches LinkedIn, Glassdoor, and Indeed scrapers concurrently in parallel threads (using `ThreadPoolExecutor` within LangGraph nodes) to optimize search wait times from ~45 seconds down to **~15 seconds**.
+- **Parallel Scraping Concurrency**: Launches LinkedIn and Glassdoor scrapers concurrently in parallel threads (using `ThreadPoolExecutor` within LangGraph nodes) to optimize search wait times.
 - **Playwright Auto-Login & Base64 Cookie Preservation**:
   - Automatically prompts user for login in real browser instances if credentials are missing or expired.
   - Extracts full browser context storage states and saves them as base64-encoded strings inside `.env` to prevent quote truncation errors.
@@ -67,7 +67,6 @@ Create a `.env` file in the root directory. Below is the reference configuration
 | `MAX_BUDGET_USD` | No | Session limit in USD before halting requests to control costs. | Set a decimal value (e.g., `2.00`). Defaults to `2.0` if not set. |
 | `LINKEDIN_STORAGE_STATE` | Yes | Base64-encoded Playwright session cookies for LinkedIn. | Generated automatically by running `python linkedin_login.py`. |
 | `GLASSDOOR_STORAGE_STATE`| Yes | Base64-encoded Playwright session cookies for Glassdoor. | Generated automatically by running `python glassdoor_login.py`. |
-| `INDEED_STORAGE_STATE`   | Yes | Base64-encoded Playwright session cookies for Indeed. | Generated automatically by running `python indeed_login.py`. |
 
 > [!NOTE]
 > If `MONGO_URI` is omitted, empty, or fails to connect, the engine automatically degrades to **Local Fallback Mode** (reading/writing to `scraped_jobs.json` and local SQLite `outputs/jobs.db`).

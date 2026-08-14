@@ -49,8 +49,10 @@ def run_cv_matching(
     print(sep_str)
     
     for idx, job in enumerate(jobs, 1):
-        title = job.get("title", "Unknown Title")
-        company = job.get("company", "Unknown Company")
+        raw_title = job.get("title", "Unknown Title")
+        title = " ".join(str(raw_title).replace("\n", " ").replace("\r", " ").split())
+        raw_company = job.get("company", "Unknown Company")
+        company = " ".join(str(raw_company).replace("\n", " ").replace("\r", " ").split())
         
         # Check if job is already scored (caching)
         existing_score = job.get("score")
@@ -91,6 +93,9 @@ def run_cv_matching(
         score_str = f"{score}/10" if score is not None else "Pending"
         print(format_str.format(str(idx), t_title, t_company, status_str, score_str))
         
+        raw_loc = job.get("location", "")
+        clean_loc = " ".join(str(raw_loc).replace("\n", " ").replace("\r", " ").split())
+        
         job_result = {
             "sr_no": job.get("sr_no", idx),
             "title": title,
@@ -98,7 +103,7 @@ def run_cv_matching(
             "score": score,
             "explanation": explanation,
             "url": job.get("url", ""),
-            "location": job.get("location", "")
+            "location": clean_loc
         }
         
         all_results.append(job_result)

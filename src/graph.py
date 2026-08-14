@@ -6,7 +6,6 @@ from langgraph.graph import StateGraph, START, END
 from src.config import Config
 from src.models import Job
 from src.scrapers.linkedin import LinkedInScraper
-from src.scrapers.indeed import IndeedScraper
 from src.scrapers.glassdoor import GlassdoorScraper
 from src.verifier import JobVerifier
 from src.database import DatabaseHandler, LocalDatabaseHandler
@@ -31,13 +30,6 @@ def scrape_linkedin_node(state: ScraperState) -> Dict[str, Any]:
     if "linkedin" not in state["sources"]:
         return {"raw_jobs": []}
     scraper = LinkedInScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
-    return {"raw_jobs": jobs}
-
-def scrape_indeed_node(state: ScraperState) -> Dict[str, Any]:
-    if "indeed" not in state["sources"]:
-        return {"raw_jobs": []}
-    scraper = IndeedScraper()
     jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
     return {"raw_jobs": jobs}
 
@@ -176,7 +168,6 @@ def build_scraper_graph():
     
     # Add nodes
     workflow.add_node("scrape_linkedin", scrape_linkedin_node)
-    workflow.add_node("scrape_indeed", scrape_indeed_node)
     workflow.add_node("scrape_glassdoor", scrape_glassdoor_node)
     workflow.add_node("verify_jobs", verify_jobs_node)
     workflow.add_node("score_jobs", score_jobs_node)
@@ -184,12 +175,10 @@ def build_scraper_graph():
     
     # Parallel scraping
     workflow.add_edge(START, "scrape_linkedin")
-    workflow.add_edge(START, "scrape_indeed")
     workflow.add_edge(START, "scrape_glassdoor")
     
     # Merge paths into verification
     workflow.add_edge("scrape_linkedin", "verify_jobs")
-    workflow.add_edge("scrape_indeed", "verify_jobs")
     workflow.add_edge("scrape_glassdoor", "verify_jobs")
     
     # Sequential processing

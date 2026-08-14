@@ -15,7 +15,7 @@ from src.graph import build_scraper_graph
 
 def parse_args():
     """Parses command-line arguments."""
-    parser = argparse.ArgumentParser(description="SOLID Job Scraper for LinkedIn, Glassdoor, and Indeed")
+    parser = argparse.ArgumentParser(description="SOLID Job Scraper for LinkedIn and Glassdoor")
     parser.add_argument("--role", type=str, default="Software QA Engineer", help="Job role to search for")
     parser.add_argument("--location", type=str, default="Pune", help="Location to search for")
     parser.add_argument("--experience", type=str, default="1-3 years", help="Required experience level (e.g., '1-3 years', 'Entry Level')")
@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument("--claude-model", type=str, default="claude haiku 4.5", help="Claude model to use for matching and tailoring")
     parser.add_argument("--groq-model", type=str, default=None, help="Deprecated: Use --claude-model instead")
     parser.add_argument("--openrouter-model", type=str, default=None, help="Deprecated: Use --claude-model instead")
-    parser.add_argument("--sources", type=str, default="linkedin,glassdoor,indeed", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor,indeed')")
+    parser.add_argument("--sources", type=str, default="linkedin,glassdoor", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor')")
     
     args = parser.parse_args()
     if not args.groq_model:
@@ -201,8 +201,10 @@ def generate_documents_for_all_jobs(args, outputs_dir):
         generation_results = []
         
         for idx, job in enumerate(jobs_to_process, start=1):
-            title = job.get("title", "Unknown Title")
-            company = job.get("company", "Unknown Company")
+            raw_title = job.get("title", "Unknown Title")
+            title = " ".join(str(raw_title).replace("\n", " ").replace("\r", " ").split())
+            raw_company = job.get("company", "Unknown Company")
+            company = " ".join(str(raw_company).replace("\n", " ").replace("\r", " ").split())
             
             is_target = any(
                 j.get("url") == job.get("url") and j.get("title") == job.get("title") 
@@ -258,8 +260,10 @@ def generate_documents_for_all_jobs(args, outputs_dir):
         print(format_str.format(*headers))
         print(sep_str)
         for res in generation_results:
-            t_title = res['title'][:32] + "..." if len(res['title']) > 35 else res['title']
-            t_company = res['company'][:17] + "..." if len(res['company']) > 20 else res['company']
+            clean_title = " ".join(str(res['title']).replace("\n", " ").replace("\r", " ").split())
+            clean_comp = " ".join(str(res['company']).replace("\n", " ").replace("\r", " ").split())
+            t_title = clean_title[:32] + "..." if len(clean_title) > 35 else clean_title
+            t_company = clean_comp[:17] + "..." if len(clean_comp) > 20 else clean_comp
             print(format_str.format(str(res['no']), t_title, t_company, res['status'], res['ats_score']))
         print("-" * len(sep_str) + "\n")
         
@@ -279,9 +283,11 @@ def print_match_scores_table(all_results, matched_results):
     print(format_str.format(*headers))
     print(sep_str)
     for idx, res in enumerate(all_results, 1):
-        t_title = res['title'][:37] + "..." if len(res['title']) > 40 else res['title']
-        t_company = res['company'][:22] + "..." if len(res['company']) > 25 else res['company']
-        score_str = f"{res['score']}/10" if res['score'] is not None else "N/A"
+        clean_title = " ".join(str(res.get('title', '')).replace("\n", " ").replace("\r", " ").split())
+        clean_comp = " ".join(str(res.get('company', '')).replace("\n", " ").replace("\r", " ").split())
+        t_title = clean_title[:37] + "..." if len(clean_title) > 40 else clean_title
+        t_company = clean_comp[:22] + "..." if len(clean_comp) > 25 else clean_comp
+        score_str = f"{res['score']}/10" if res.get('score') is not None else "N/A"
         print(format_str.format(str(idx), t_title, t_company, score_str))
     print("-" * len(sep_str) + "\n")
     
@@ -292,11 +298,13 @@ def print_match_scores_table(all_results, matched_results):
         print("No jobs with match score above 6.")
     else:
         for res in matched_results:
-            print(f"- {res['title']} ({res['company']})")
+            clean_title = " ".join(str(res.get('title', '')).replace("\n", " ").replace("\r", " ").split())
+            clean_comp = " ".join(str(res.get('company', '')).replace("\n", " ").replace("\r", " ").split())
+            print(f"- {clean_title} ({clean_comp})")
     print("=" * 90 + "\n")
 
 def print_jobs_table(output_path: str):
-    """Prints separate formatted tables for LinkedIn, Glassdoor, and Indeed jobs."""
+    """Prints separate formatted tables for LinkedIn and Glassdoor jobs."""
     if not os.path.exists(output_path):
         return
     try:
@@ -308,14 +316,17 @@ def print_jobs_table(output_path: str):
         # Group jobs by platform (case-insensitive)
         platform_jobs = {}
         for job in jobs:
-            platform = job.get("site", "Unknown").strip()
+            platform = job.get("site", "Unknown")
+            if isinstance(platform, list):
+                platform = platform[0] if platform else "Unknown"
+            platform = str(platform).strip()
             platform_lower = platform.lower()
             if platform_lower not in platform_jobs:
                 platform_jobs[platform_lower] = []
             platform_jobs[platform_lower].append(job)
             
         # Display order
-        platform_order = ["linkedin", "glassdoor", "indeed"]
+        platform_order = ["linkedin", "glassdoor"]
         # Add other platforms if found
         for p in platform_jobs:
             if p not in platform_order:
@@ -326,7 +337,10 @@ def print_jobs_table(output_path: str):
                 continue
                 
             jobs_list = platform_jobs[p_key]
-            platform_name = jobs_list[0].get("site", p_key.title()).strip()
+            site_val = jobs_list[0].get("site", p_key.title())
+            if isinstance(site_val, list):
+                site_val = site_val[0] if site_val else p_key.title()
+            platform_name = str(site_val).strip()
             
             # Print Table Header
             title_text = f"{platform_name} Jobs"
@@ -340,22 +354,25 @@ def print_jobs_table(output_path: str):
             
             rows = []
             for idx, job in enumerate(jobs_list, start=1):
-                title = job.get("title", "").replace("\n", " ").replace("\r", " ").strip()
+                raw_title = job.get("title", "")
+                title = " ".join(str(raw_title).replace("\n", " ").replace("\r", " ").split())
                 if len(title) > 30:
                     title = title[:27] + "..."
                     
-                company = job.get("company", "").strip()
+                raw_company = job.get("company", "")
+                company = " ".join(str(raw_company).replace("\n", " ").replace("\r", " ").split())
                 if len(company) > 20:
                     company = company[:17] + "..."
                     
-                location = job.get("location", "").strip()
+                raw_loc = job.get("location", "")
+                location = " ".join(str(raw_loc).replace("\n", " ").replace("\r", " ").split())
                 if len(location) > 15:
                     location = location[:12] + "..."
                     
                 exp = job.get("experience_required")
                 if exp is None:
                     exp = "N/A"
-                exp = str(exp).strip()
+                exp = " ".join(str(exp).replace("\n", " ").replace("\r", " ").split())
                 if len(exp) > 15:
                     exp = exp[:12] + "..."
                     
@@ -527,15 +544,6 @@ def main():
         if not Config.GLASSDOOR_COOKIE or not Config.GLASSDOOR_COOKIE.strip() or not Config.GLASSDOOR_USER_AGENT or not Config.GLASSDOOR_USER_AGENT.strip():
             print("[ERROR] GLASSDOOR_COOKIE or GLASSDOOR_USER_AGENT is not set in .env. Glassdoor execution stopped.")
             return
-
-    # Check if IndeedScraper is being run, and if so, check login
-    has_indeed = any(cls.__name__ == "IndeedScraper" for cls in scraper_classes)
-    if has_indeed:
-        try:
-            from indeed_login import check_and_login_indeed
-            check_and_login_indeed()
-        except Exception as e:
-            print(f"[Warning] Indeed login helper failed to run: {e}")
 
     # Build and invoke LangGraph Scraper Graph
     print("\n[Pipeline] Building and running LangGraph pipeline...")
