@@ -41,3 +41,5 @@ outputs/
 playwright_linkedin_session/
 playwright_glassdoor_session/
 playwright_indeed_session/
+
+.github/
