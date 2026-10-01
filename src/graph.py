@@ -6,11 +6,10 @@ from langgraph.graph import StateGraph, START, END
 from src.config import Config
 from src.models import Job
 from src.scrapers.linkedin import LinkedInScraper
-from src.scrapers.indeed import IndeedScraper
 from src.scrapers.glassdoor import GlassdoorScraper
 from src.verifier import JobVerifier
 from src.database import DatabaseHandler, LocalDatabaseHandler
-from src.tailor_cv.groq_client import GroqClient
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
 
 class ScraperState(TypedDict):
     role: str
@@ -25,26 +24,20 @@ class ScraperState(TypedDict):
     verified_jobs: List[Job]
     processed_jobs_list: List[dict]
     summary_stats: dict
+    start_offset: int
 
 def scrape_linkedin_node(state: ScraperState) -> Dict[str, Any]:
     if "linkedin" not in state["sources"]:
         return {"raw_jobs": []}
     scraper = LinkedInScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"])
-    return {"raw_jobs": jobs}
-
-def scrape_indeed_node(state: ScraperState) -> Dict[str, Any]:
-    if "indeed" not in state["sources"]:
-        return {"raw_jobs": []}
-    scraper = IndeedScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"])
+    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
     return {"raw_jobs": jobs}
 
 def scrape_glassdoor_node(state: ScraperState) -> Dict[str, Any]:
     if "glassdoor" not in state["sources"]:
         return {"raw_jobs": []}
     scraper = GlassdoorScraper()
-    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"])
+    jobs = scraper.scrape(state["role"], state["location"], state["experience"], limit=state["limit"], start_offset=state.get("start_offset", 0))
     return {"raw_jobs": jobs}
 
 def verify_jobs_node(state: ScraperState) -> Dict[str, Any]:
@@ -75,11 +68,11 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
     processed_jobs = []
     
     client = None
-    if cv_text and Config.GROQ_API and Config.GROQ_API.strip():
+    if cv_text and Config.CLAUDE_API and Config.CLAUDE_API.strip():
         try:
-            client = GroqClient(model=state.get("groq_model", "llama-3.1-8b-instant"))
+            client = ClaudeClient(model=state.get("groq_model", "claude-3-5-haiku-20241022"))
         except Exception as e:
-            print(f"[LangGraph Score Node Error] Failed to initialize Groq Client: {e}")
+            print(f"[LangGraph Score Node Error] Failed to initialize Claude Client: {e}")
             
     for job in verified_jobs:
         job_dict = job.to_dict()
@@ -89,7 +82,12 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
                 res = client.get_match_score(cv_text, job_dict)
                 job_dict["score"] = res["score"]
                 job_dict["explanation"] = res["explanation"]
+                accumulate_job_tokens(job_dict, res["usage"])
                 print(f"    -> Score: {res['score']}/10")
+                
+                # Respect rate limit
+                import time
+                time.sleep(2.0)
             except Exception as e:
                 print(f"    -> Scoring failed: {e}")
                 job_dict["score"] = 0
@@ -126,8 +124,19 @@ def save_jobs_node(state: ScraperState) -> Dict[str, Any]:
     new_inserted = 0
     updated_count = 0
     saved_jobs_list = []
+    cv_text = state.get("cv_text", "")
     
     for job_dict in processed_jobs:
+        score_val = job_dict.get("score")
+        try:
+            is_above_6 = score_val is not None and int(score_val) > 6
+        except (ValueError, TypeError):
+            is_above_6 = False
+
+        # Only save to DB if score > 6 when CV evaluation was performed
+        if cv_text and not is_above_6:
+            continue
+
         job_obj = Job(
             title=job_dict.get("title", ""),
             company=job_dict.get("company", ""),
@@ -143,6 +152,8 @@ def save_jobs_node(state: ScraperState) -> Dict[str, Any]:
             job_obj.score = job_dict["score"]
         if "explanation" in job_dict:
             job_obj.explanation = job_dict["explanation"]
+        if "tokens_consumed" in job_dict:
+            job_obj.tokens_consumed = job_dict["tokens_consumed"]
             
         is_new, saved_doc = db.save_job(job_obj)
         if is_new:
@@ -152,6 +163,7 @@ def save_jobs_node(state: ScraperState) -> Dict[str, Any]:
         saved_jobs_list.append(saved_doc)
         
     db.close()
+
     
     stats = {
         "total_raw": len(state.get("raw_jobs", [])),
@@ -168,7 +180,6 @@ def build_scraper_graph():
     
     # Add nodes
     workflow.add_node("scrape_linkedin", scrape_linkedin_node)
-    workflow.add_node("scrape_indeed", scrape_indeed_node)
     workflow.add_node("scrape_glassdoor", scrape_glassdoor_node)
     workflow.add_node("verify_jobs", verify_jobs_node)
     workflow.add_node("score_jobs", score_jobs_node)
@@ -176,12 +187,10 @@ def build_scraper_graph():
     
     # Parallel scraping
     workflow.add_edge(START, "scrape_linkedin")
-    workflow.add_edge(START, "scrape_indeed")
     workflow.add_edge(START, "scrape_glassdoor")
     
     # Merge paths into verification
     workflow.add_edge("scrape_linkedin", "verify_jobs")
-    workflow.add_edge("scrape_indeed", "verify_jobs")
     workflow.add_edge("scrape_glassdoor", "verify_jobs")
     
     # Sequential processing

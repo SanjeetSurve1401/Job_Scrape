@@ -11,7 +11,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from src.tailor_cv.pdf_parser import extract_text_from_pdf
-from src.tailor_cv.groq_client import GroqClient
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
 
 def sanitize_filename(name: str) -> str:
     clean = re.sub(r'[^a-zA-Z0-9_\-]', '_', name)
@@ -19,211 +19,26 @@ def sanitize_filename(name: str) -> str:
     return clean.strip('_').lower()
 
 def get_tailored_cv_data(client, cv_text, job_details) -> dict:
-    job_info = f"Title: {job_details.get('title', 'N/A')}\nCompany: {job_details.get('company', 'N/A')}\nDescription: {job_details.get('about_job', 'N/A')}"
-    system_prompt = (
-        "You are an expert technical recruiter and resume writer.\n"
-        "Your task is to rewrite and tailor the candidate's CV to maximize its ATS match and relevance for the given job posting.\n"
-        "Follow these strict rules:\n"
-        "1. Do NOT invent or fabricate any experience, skills, projects, certifications, or achievements. Doing so is fraud.\n"
-        "2. Only rephrase, reorganize, and emphasize information already present in the original CV.\n"
-        "3. Incorporate relevant keywords, skills, and technologies from the job description ONLY where they genuinely match the candidate's existing experience.\n"
-        "4. Prioritize and highlight the experience, projects, and skills that are most relevant to the target role.\n"
-        "5. The output must be a valid JSON object matching the schema below. Do not include any other text, markdown formatting (no ```json), or comments.\n\n"
-        "JSON Schema:\n"
-        "{\n"
-        "  \"contact_info\": {\n"
-        "    \"name\": \"Candidate's full name\",\n"
-        "    \"email\": \"Candidate's email\",\n"
-        "    \"phone\": \"Candidate's phone number\",\n"
-        "    \"linkedin\": \"Candidate's LinkedIn URL (if present)\",\n"
-        "    \"github\": \"Candidate's GitHub URL (if present)\",\n"
-        "    \"location\": \"Candidate's city/location\"\n"
-        "  },\n"
-        "  \"professional_summary\": \"A short, compelling, and tailored professional summary.\",\n"
-        "  \"skills\": {\n"
-        "    \"technical_skills\": [\"list of technical skills\"],\n"
-        "    \"tools_and_technologies\": [\"list of tools and technologies\"],\n"
-        "    \"soft_skills\": [\"list of soft skills/methodologies\"]\n"
-        "  },\n"
-        "  \"work_experience\": [\n"
-        "    {\n"
-        "      \"company\": \"Company name\",\n"
-        "      \"role\": \"Job title / Role\",\n"
-        "      \"location\": \"Company location\",\n"
-        "      \"start_date\": \"Start date\",\n"
-        "      \"end_date\": \"End date or Present\",\n"
-        "      \"achievements\": [\n"
-        "        \"Bullet point 1 detailing achievements and responsibilities\",\n"
-        "        \"Bullet point 2...\"\n"
-        "      ]\n"
-        "    }\n"
-        "  ],\n"
-        "  \"projects\": [\n"
-        "    {\n"
-        "      \"title\": \"Project title\",\n"
-        "      \"technologies\": \"Technologies used\",\n"
-        "      \"description\": \"Project description tailored to highlight relevant skills\"\n"
-        "    }\n"
-        "  ],\n"
-        "  \"education\": [\n"
-        "    {\n"
-        "      \"institution\": \"School/University name\",\n"
-        "      \"degree\": \"Degree\",\n"
-        "      \"major\": \"Major\",\n"
-        "      \"graduation_year\": \"Year of graduation\"\n"
-        "    }\n"
-        "  ],\n"
-        "  \"certifications\": [\"list of certifications\"]\n"
-        "}"
-    )
-    user_content = f"Candidate's original CV text:\n{cv_text}\n\nJob details:\n{job_info}"
-    payload = {
-        "model": client.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.3
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {client.api_key}"
-    }
-    max_retries = 5
-    backoff = 7.0
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(client.url, headers=headers, json=payload, timeout=45)
-            if response.status_code == 429:
-                if attempt < max_retries - 1:
-                    print(f"    [Rate Limit] Hit 429 (Too Many Requests). Retrying in {backoff}s...")
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-            response.raise_for_status()
-            res_json = response.json()
-            return json.loads(res_json['choices'][0]['message']['content'].strip())
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"    [Warning] Request failed: {e}. Retrying in {backoff}s...")
-                time.sleep(backoff)
-                backoff *= 2
-            else:
-                raise e
+    if hasattr(client, 'get_tailored_cv_data'):
+        res = client.get_tailored_cv_data(cv_text, job_details)
+        client.last_usage = res.get("usage")
+        return res.get("data")
+    raise ValueError("Unsupported client type passed to get_tailored_cv_data")
 
 def get_tailored_cl_data(client, cv_text, job_details) -> dict:
-    job_info = f"Title: {job_details.get('title', 'N/A')}\nCompany: {job_details.get('company', 'N/A')}\nDescription: {job_details.get('about_job', 'N/A')}"
-    system_prompt = (
-        "You are an expert career consultant.\n"
-        "Write a professional, customized cover letter for the candidate applying to the given job posting.\n"
-        "Follow these strict rules:\n"
-        "1. Do NOT invent or fabricate any experience, skills, projects, certifications, or achievements. Only use facts present in the candidate's CV.\n"
-        "2. Align the cover letter with the job requirements and highlight the candidate's most relevant qualifications and experiences.\n"
-        "3. Keep the tone professional, persuasive, and engaging.\n"
-        "4. Format the output as a valid JSON object matching the schema below. Do not include any other text, markdown formatting (no ```json), or comments.\n\n"
-        "JSON Schema:\n"
-        "{\n"
-        "  \"recipient_name\": \"Hiring Manager or Recruitment Team\",\n"
-        "  \"company_name\": \"Company Name\",\n"
-        "  \"date\": \"Current Date (e.g., July 6, 2026)\",\n"
-        "  \"subject\": \"Application for [Job Title] - [Candidate Name]\",\n"
-        "  \"salutation\": \"Dear Hiring Manager,\",\n"
-        "  \"opening_paragraph\": \"Introduction of the candidate, the role they are applying for, and why they are interested in the company.\",\n"
-        "  \"body_paragraphs\": [\n"
-        "    \"Paragraph highlighting matching experience and skills.\",\n"
-        "    \"Paragraph discussing specific achievements or projects.\"\n"
-        "  ],\n"
-        "  \"closing_paragraph\": \"Summary of interest, call to action, and professional wrap-up.\",\n"
-        "  \"sign_off\": \"Sincerely,\",\n"
-        "  \"sender_name\": \"Candidate's Full Name\"\n"
-        "}"
-    )
-    user_content = f"Candidate's original CV text:\n{cv_text}\n\nJob details:\n{job_info}"
-    payload = {
-        "model": client.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.3
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {client.api_key}"
-    }
-    max_retries = 5
-    backoff = 7.0
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(client.url, headers=headers, json=payload, timeout=45)
-            if response.status_code == 429:
-                if attempt < max_retries - 1:
-                    print(f"    [Rate Limit] Hit 429 (Too Many Requests). Retrying in {backoff}s...")
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-            response.raise_for_status()
-            res_json = response.json()
-            return json.loads(res_json['choices'][0]['message']['content'].strip())
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"    [Warning] Request failed: {e}. Retrying in {backoff}s...")
-                time.sleep(backoff)
-                backoff *= 2
-            else:
-                raise e
+    if hasattr(client, 'get_tailored_cl_data'):
+        res = client.get_tailored_cl_data(cv_text, job_details)
+        client.last_usage = res.get("usage")
+        return res.get("data")
+    raise ValueError("Unsupported client type passed to get_tailored_cl_data")
 
 
 def get_tailored_ats_score(client, cv_data: dict, job_details: dict) -> str:
-    cv_str = json.dumps(cv_data, indent=2, ensure_ascii=False)
-    job_info = f"Title: {job_details.get('title', 'N/A')}\nCompany: {job_details.get('company', 'N/A')}\nDescription: {job_details.get('about_job', 'N/A')}"
-    
-    system_prompt = (
-        "You are an ATS (Applicant Tracking System) scanner simulator.\n"
-        "Your task is to analyze the provided tailored CV against the job description and compute a realistic, objective ATS match score.\n"
-        "The match score must be an integer between 0 and 100 representing the match percentage.\n"
-        "Format the output as a valid JSON object with a single key 'ats_score' containing the integer (e.g., 92). Do not include any other text or markdown formatting."
-    )
-    user_content = f"Tailored CV:\n{cv_str}\n\nJob details:\n{job_info}"
-    payload = {
-        "model": client.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.1
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {client.api_key}"
-    }
-    
-    max_retries = 5
-    backoff = 7.0
-    for attempt in range(max_retries):
-        try:
-            response = requests.post(client.url, headers=headers, json=payload, timeout=45)
-            if response.status_code == 429:
-                if attempt < max_retries - 1:
-                    print(f"    [Rate Limit] Hit 429 (Too Many Requests). Retrying in {backoff}s...")
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-            response.raise_for_status()
-            res_json = response.json()
-            data = json.loads(res_json['choices'][0]['message']['content'].strip())
-            score_val = data.get("ats_score", 0)
-            return f"{score_val}%"
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"    [Warning] Request failed: {e}. Retrying in {backoff}s...")
-                time.sleep(backoff)
-                backoff *= 2
-            else:
-                return "0%"
+    if hasattr(client, 'get_tailored_ats_score'):
+        res = client.get_tailored_ats_score(cv_data, job_details)
+        client.last_usage = res.get("usage")
+        return res.get("ats_score")
+    raise ValueError("Unsupported client type passed to get_tailored_ats_score")
 
 def generate_pdf_cv(cv_data: dict, output_path: str):
     doc = SimpleDocTemplate(output_path, pagesize=letter, rightMargin=54, leftMargin=54, topMargin=54, bottomMargin=54)
@@ -554,16 +369,20 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         from src.tailor_cv.pdf_parser import extract_text_from_pdf
         cv_text = extract_text_from_pdf(cv_path)
         
-        from src.tailor_cv.groq_client import GroqClient
-        client = GroqClient(model=model)
+        from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
+        client = ClaudeClient(model=model)
         
-        print(f"  \n[Tailoring CV] Calling LLM for '{job.get('title')}' at '{job.get('company')}'...\n")
+        print(f"  \n[Tailoring CV] Calling LLM (Claude) for '{job.get('title')}' at '{job.get('company')}'...\n")
         cv_data = get_tailored_cv_data(client, cv_text, job)
+        if hasattr(client, 'last_usage') and client.last_usage:
+            accumulate_job_tokens(job, client.last_usage)
         
-        time.sleep(3.0)
+        time.sleep(2.0)
         
-        print(f"  [Tailoring Cover Letter] Calling LLM for '{job.get('title')}' at '{job.get('company')}'...")
+        print(f"  [Tailoring Cover Letter] Calling LLM (Claude) for '{job.get('title')}' at '{job.get('company')}'...")
         cl_data = get_tailored_cl_data(client, cv_text, job)
+        if hasattr(client, 'last_usage') and client.last_usage:
+            accumulate_job_tokens(job, client.last_usage)
         
         company_clean = sanitize_filename(job.get('company', 'Unknown_Company'))
         title_clean = sanitize_filename(job.get('title', 'Unknown_Title'))
@@ -585,6 +404,8 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         print(f"  \n[ATS Scanner] Simulating ATS match score for tailored CV...\n")
         ats_score = get_tailored_ats_score(client, cv_data, job)
         job["ats_score"] = ats_score
+        if hasattr(client, 'last_usage') and client.last_usage:
+            accumulate_job_tokens(job, client.last_usage)
         
         # Save job details as JSON in the same folder
         job_json_path = os.path.join(target_dir, "job_details.json")

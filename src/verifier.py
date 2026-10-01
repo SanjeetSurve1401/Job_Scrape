@@ -173,15 +173,8 @@ class JobVerifier(VerifierInterface):
         req_min, req_max = self.parse_experience_string(req_experience)
         
         if req_min is not None:
-            # Check if job is from Indeed (site list/string contains "Indeed")
-            is_indeed = False
-            if isinstance(job.site, list):
-                is_indeed = any(s.strip().lower() == "indeed" for s in job.site)
-            elif isinstance(job.site, str):
-                is_indeed = "indeed" in job.site.lower()
-                
-            # If the job is from Indeed and has an explicit experience range metadata
-            if is_indeed and job.experience_required:
+            # If the job has an explicit experience range metadata
+            if job.experience_required:
                 job_min, job_max = self.parse_experience_string(job.experience_required)
                 if job_min is not None:
                     overlap_min = max(req_min, job_min)
@@ -189,10 +182,9 @@ class JobVerifier(VerifierInterface):
                     if overlap_min <= overlap_max:
                         return True
                     else:
-                        # Indeed explicitly lists experience requirements; if they don't overlap, reject it
                         return False
             
-            # Fallback for non-Indeed or when Indeed metadata is not available/parsable
+            # Fallback when metadata is not available/parsable: extract from description text
             job_exp_ranges = self.extract_experience_from_text(job.about_job)
             if job_exp_ranges:
                 overlap = False

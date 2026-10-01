@@ -166,18 +166,26 @@ class GlassdoorScraper(BaseScraper):
 
     # ── Main Scrape Method ───────────────────────────────────────────
 
-    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        print(f"\n[Glassdoor] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
+    def scrape(self, role: str, location: str, experience: str, limit: int = 10, start_offset: int = 0) -> List[Job]:
+        print(f"\n[Glassdoor] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit}, Offset: {start_offset})")
         scraped_jobs = []
         
         # Load storage state from Config
         storage_state = None
-        if Config.GLASSDOOR_STORAGE_STATE and Config.GLASSDOOR_STORAGE_STATE.strip():
+        storage_state_env = Config.GLASSDOOR_STORAGE_STATE
+        if storage_state_env and storage_state_env.strip():
             try:
-                storage_state = json.loads(Config.GLASSDOOR_STORAGE_STATE)
-                print("[Glassdoor] Loaded storage state from .env settings.")
-            except Exception as e:
-                print(f"[Glassdoor Warning] Failed to parse GLASSDOOR_STORAGE_STATE JSON: {e}")
+                import base64
+                try:
+                    decoded = base64.b64decode(storage_state_env, validate=True).decode("utf-8")
+                    storage_state = json.loads(decoded)
+                except Exception:
+                    if (storage_state_env.startswith("'") and storage_state_env.endswith("'")) or \
+                       (storage_state_env.startswith('"') and storage_state_env.endswith('"')):
+                        storage_state_env = storage_state_env[1:-1]
+                    storage_state = json.loads(storage_state_env)
+            except Exception:
+                print("[Glassdoor] Storage state in .env is invalid or outdated. Please run 'python glassdoor_login.py' to login again.")
                 
         user_data_dir = os.path.abspath("./playwright_glassdoor_session")
         
@@ -198,7 +206,7 @@ class GlassdoorScraper(BaseScraper):
                     if not os.path.exists(user_data_dir):
                         print("[Glassdoor ERROR] No storage state in .env or session directory found! Run glassdoor_login.py first.")
                         return []
-                    print("[Glassdoor] Using persistent session directory.")
+                    # Silenced persistent session print
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=user_data_dir,
                         headless=True,
@@ -215,6 +223,9 @@ class GlassdoorScraper(BaseScraper):
             query_role = urllib.parse.quote(role)
             query_loc = urllib.parse.quote(location)
             url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={query_role}&locN={query_loc}"
+            if start_offset > 0:
+                page_num = (start_offset // limit) + 1
+                url += f"&p={page_num}"
             
             print(f"[Glassdoor] Navigating to: {url}")
             try:
@@ -264,12 +275,18 @@ class GlassdoorScraper(BaseScraper):
                 job_details = jobview.get("job", {})
                 
                 title = header.get("jobTitleText") or job_details.get("jobTitleText") or ""
+                if title:
+                    title = " ".join(str(title).split())
                 
                 company = header.get("employerNameFromSearch") or ""
                 if not company and "employer" in header:
                     company = header["employer"].get("name") or header["employer"].get("shortName") or ""
+                if company:
+                    company = " ".join(str(company).split())
                 
                 location_name = header.get("locationName", "")
+                if location_name:
+                    location_name = " ".join(str(location_name).split())
                 
                 url = header.get("seoJobLink") or ""
                 if url and not url.startswith("http"):

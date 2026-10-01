@@ -14,18 +14,26 @@ from src.models import Job
 
 @register_scraper
 class LinkedInScraper(BaseScraper):
-    def scrape(self, role: str, location: str, experience: str, limit: int = 10) -> List[Job]:
-        print(f"\n[LinkedIn] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit})")
+    def scrape(self, role: str, location: str, experience: str, limit: int = 10, start_offset: int = 0) -> List[Job]:
+        print(f"\n[LinkedIn] Starting Playwright Scraper for Role: '{role}', Location: '{location}' (Limit: {limit}, Offset: {start_offset})")
         scraped_jobs = []
         
         # Load storage state from Config
         storage_state = None
-        if Config.LINKEDIN_STORAGE_STATE and Config.LINKEDIN_STORAGE_STATE.strip():
+        storage_state_env = Config.LINKEDIN_STORAGE_STATE
+        if storage_state_env and storage_state_env.strip():
             try:
-                storage_state = json.loads(Config.LINKEDIN_STORAGE_STATE)
-                print("[LinkedIn] Loaded storage state from .env settings.")
-            except Exception as e:
-                print(f"[LinkedIn Warning] Failed to parse LINKEDIN_STORAGE_STATE JSON: {e}")
+                import base64
+                try:
+                    decoded = base64.b64decode(storage_state_env, validate=True).decode("utf-8")
+                    storage_state = json.loads(decoded)
+                except Exception:
+                    if (storage_state_env.startswith("'") and storage_state_env.endswith("'")) or \
+                       (storage_state_env.startswith('"') and storage_state_env.endswith('"')):
+                        storage_state_env = storage_state_env[1:-1]
+                    storage_state = json.loads(storage_state_env)
+            except Exception:
+                print("[LinkedIn] Storage state in .env is invalid or outdated. Please run 'python linkedin_login.py' to login again.")
                 
         user_data_dir = os.path.abspath("./playwright_linkedin_session")
         
@@ -47,7 +55,7 @@ class LinkedInScraper(BaseScraper):
                     if not os.path.exists(user_data_dir):
                         print("[LinkedIn ERROR] No storage state in .env or session directory found! Run linkedin_login.py first.")
                         return []
-                    print("[LinkedIn] Using persistent session directory.")
+                    # Silenced persistent session print
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=user_data_dir,
                         headless=True,
@@ -65,6 +73,8 @@ class LinkedInScraper(BaseScraper):
             query_role = urllib.parse.quote(role)
             query_loc = urllib.parse.quote(location)
             url = f"https://www.linkedin.com/jobs/search/?keywords={query_role}&location={query_loc}"
+            if start_offset > 0:
+                url += f"&start={start_offset}"
             
             print(f"[LinkedIn] Navigating to: {url}")
             try:
@@ -80,21 +90,24 @@ class LinkedInScraper(BaseScraper):
                         context.close()
                     return []
                 
-                page.wait_for_selector(".scaffold-layout__list-container, .jobs-search-results-list", timeout=15000)
+                page.wait_for_selector(
+                    ".scaffold-layout__list-container, .jobs-search-results-list, li.jobs-search-results__list-item, div.job-card-container, [data-occludable-job-id]",
+                    timeout=5000
+                )
             except Exception as e:
-                print(f"[LinkedIn] Warning: job list selector not found or timeout: {e}")
+                pass
                 
             # Scroll the job list pane to load more items
             try:
                 pane_selector = ".jobs-search-results-list, .jobs-search-results-list__container"
                 pane = page.locator(pane_selector).first
-                if pane:
+                if pane.count() > 0:
                     print("[LinkedIn] Scrolling job list to load more jobs...")
                     for _ in range(5):
                         pane.evaluate("el => el.scrollTop = el.scrollHeight")
                         page.wait_for_timeout(1000)
             except Exception as scroll_error:
-                print(f"[LinkedIn] Scroll failed: {scroll_error}")
+                pass
 
             # Extract job cards
             html = page.content()
@@ -133,13 +146,18 @@ class LinkedInScraper(BaseScraper):
                     title = title_elem.get_text().strip() if title_elem else ""
                     if not title and link_elem:
                         title = link_elem.get_text().strip()
+                    if title:
+                        title = title.split("\n")[0].strip()
+                        title = " ".join(title.split())
                         
                     company_elem = card.select_one(".job-card-container__company-name, .job-card-container__primary-description, .artdeco-entity-lockup__subtitle")
                     company = company_elem.get_text().strip() if company_elem else ""
                     company = company.split("\n")[0].strip()
+                    company = " ".join(company.split())
                     
                     loc_elem = card.select_one(".job-card-container__metadata-item, .job-card-container__primary-description")
                     loc_name = loc_elem.get_text().strip() if loc_elem else location
+                    loc_name = " ".join(loc_name.split())
                     
                     job_url = f"https://www.linkedin.com/jobs/view/{job_id}"
                     
