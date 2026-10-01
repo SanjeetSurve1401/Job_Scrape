@@ -18,3 +18,5 @@ class Config:
     LINKEDIN_COOKIE = os.getenv("LINKEDIN_COOKIE", "")
     LINKEDIN_USER_AGENT = os.getenv("LINKEDIN_USER_AGENT", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     LINKEDIN_STORAGE_STATE = os.getenv("LINKEDIN_STORAGE_STATE", "")
+    CV_PATH = os.getenv("CV_PATH", "")
+
