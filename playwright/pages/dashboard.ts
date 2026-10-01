@@ -16,6 +16,7 @@ export class DashboardPage {
         readonly job: Locator;
         readonly nextPageBtn: Locator;
         readonly easyApply: Locator;
+        readonly applyBtn: Locator;
     }
 
 
@@ -33,9 +34,10 @@ export class DashboardPage {
         };
 
         this.jobCards = {
-            job: page.frameLocator('iframe').locator('div.display-flex.job-card-container.relative.job-card-list.job-card-container--clickable.job-card-list--underline-title-on-hover.jobs-search-results-list__list-item--active.jobs-search-two-pane__job-card-container--viewport-tracking-0'),
+            job: page.frameLocator('iframe').locator('div.job-card-container[data-job-id]'),
             nextPageBtn: page.getByRole('button', {name: 'Next'}),
             easyApply: page.locator('//button[normalize-space()="Easy Apply"]'),
+            applyBtn: page.frameLocator('iframe').locator(':text-is("Apply")'),
             
             // const jobCount = await job.count(),
         }
