@@ -435,10 +435,13 @@ def main():
 
     # 2. Resolve CV Path (Bug 2)
     cv_text = ""
+    if not args.cv and Config.CV_PATH:
+        args.cv = Config.CV_PATH
+
     if not args.cv:
         # Prompt user and wait until a valid CV path is provided
         while True:
-            user_cv = input("Please enter the path to your CV PDF file (required): ").strip()
+            user_cv = input("Please enter the path to your CV PDF file (required): ").strip().strip("'\"")
             if not user_cv:
                 print("CV path cannot be empty. Please provide a path.")
                 continue
@@ -450,11 +453,12 @@ def main():
                 print(f"CV file not found at '{resolved_cv}'. Please enter a valid path.")
     else:
         # Verify if explicitly provided CV exists. If not, prompt and wait until a valid path is given
-        resolved_cv = os.path.abspath(args.cv)
+        clean_cv = args.cv.strip().strip("'\"")
+        resolved_cv = os.path.abspath(clean_cv)
         if not (os.path.exists(resolved_cv) and os.path.isfile(resolved_cv)):
             print(f"Specified CV file not found at '{resolved_cv}'.")
             while True:
-                user_cv = input("Please enter the path to your CV PDF file (required): ").strip()
+                user_cv = input("Please enter the path to your CV PDF file (required): ").strip().strip("'\"")
                 if not user_cv:
                     print("CV path cannot be empty. Please provide a path.")
                     continue
@@ -466,6 +470,7 @@ def main():
                     print(f"CV file not found at '{resolved_cv}'. Please enter a valid path.")
         else:
             args.cv = resolved_cv
+
 
     # Extract CV text (since we guaranteed the CV file exists and is valid)
     try:
