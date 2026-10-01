@@ -36,6 +36,10 @@ cv.pdf
 
 # Generated outputs (tailored CV and cover letters)
 outputs/
+data/generated_resumes/
+data/*.json
+data/*.db
+
 
 # Playwright session browser profiles / cache
 playwright_linkedin_session/

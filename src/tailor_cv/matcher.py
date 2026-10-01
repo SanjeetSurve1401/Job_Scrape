@@ -37,17 +37,6 @@ def run_cv_matching(
     all_results = []
     matched_results = []
     
-    headers = ["No", "Job Title", "Company", "Status", "Score"]
-    col_widths = [4, 35, 20, 18, 7]
-    format_str = "| " + " | ".join([f"{{:<{w}}}" for w in col_widths]) + " |"
-    sep_str = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
-    
-    print("\n" + "=" * 90)
-    print("EVALUATING JOBS AGAINST CV USING LLM")
-    print("=" * 90)
-    print(format_str.format(*headers))
-    print(sep_str)
-    
     for idx, job in enumerate(jobs, 1):
         raw_title = job.get("title", "Unknown Title")
         title = " ".join(str(raw_title).replace("\n", " ").replace("\r", " ").split())
@@ -59,12 +48,9 @@ def run_cv_matching(
         existing_explanation = job.get("explanation")
         
         if existing_score is not None and existing_explanation:
-            status_str = "Skipping (Cached)"
             score = existing_score
             explanation = existing_explanation
         else:
-            status_str = "Scored (API Call)"
-            
             # Get score from LLM
             res = client.get_match_score(cv_text, job)
             score = res["score"]
@@ -75,24 +61,11 @@ def run_cv_matching(
             job["explanation"] = explanation
             accumulate_job_tokens(job, res["usage"])
             
-            # Write updated jobs back to JSON file immediately
-            try:
-                with open(jobs_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(jobs, f, indent=2, ensure_ascii=False)
-            except Exception as e:
-                print(f"    [Warning] Failed to write updated score to file: {e}")
-            
             # Respect rate limits by sleeping 6 seconds between actual API calls (10 requests per minute)
             if idx < len(jobs):
                 import time
                 time.sleep(6.0)
                 
-        # Truncate strings to fit columns
-        t_title = title[:32] + "..." if len(title) > 35 else title
-        t_company = company[:17] + "..." if len(company) > 20 else company
-        score_str = f"{score}/10" if score is not None else "Pending"
-        print(format_str.format(str(idx), t_title, t_company, status_str, score_str))
-        
         raw_loc = job.get("location", "")
         clean_loc = " ".join(str(raw_loc).replace("\n", " ").replace("\r", " ").split())
         
@@ -107,9 +80,16 @@ def run_cv_matching(
         }
         
         all_results.append(job_result)
-        if score > 6:
+        if score is not None and score > 6:
             matched_results.append(job_result)
-            
-    print("-" * len(sep_str) + "\n")
+
+    # Only save jobs with score > 6 to the JSON file
+    recommended_jobs = [j for j in jobs if (j.get("score") is not None and int(j.get("score")) > 6)]
+    try:
+        with open(jobs_json_path, 'w', encoding='utf-8') as f:
+            json.dump(recommended_jobs, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"    [Warning] Failed to write filtered jobs to file: {e}")
     
     return all_results, matched_results
+

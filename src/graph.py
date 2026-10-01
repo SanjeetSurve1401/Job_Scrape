@@ -124,8 +124,19 @@ def save_jobs_node(state: ScraperState) -> Dict[str, Any]:
     new_inserted = 0
     updated_count = 0
     saved_jobs_list = []
+    cv_text = state.get("cv_text", "")
     
     for job_dict in processed_jobs:
+        score_val = job_dict.get("score")
+        try:
+            is_above_6 = score_val is not None and int(score_val) > 6
+        except (ValueError, TypeError):
+            is_above_6 = False
+
+        # Only save to DB if score > 6 when CV evaluation was performed
+        if cv_text and not is_above_6:
+            continue
+
         job_obj = Job(
             title=job_dict.get("title", ""),
             company=job_dict.get("company", ""),
@@ -152,6 +163,7 @@ def save_jobs_node(state: ScraperState) -> Dict[str, Any]:
         saved_jobs_list.append(saved_doc)
         
     db.close()
+
     
     stats = {
         "total_raw": len(state.get("raw_jobs", [])),

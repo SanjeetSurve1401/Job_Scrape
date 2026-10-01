@@ -194,6 +194,9 @@ def generate_documents_for_all_jobs(args, outputs_dir):
         # Select top args.limit jobs to tailor
         target_tailor = recommended[:args.limit]
         
+        resumes_dir = os.path.join(outputs_dir, "generated_resumes")
+        os.makedirs(resumes_dir, exist_ok=True)
+        
         print(f"\nTailoring documents for the top {len(target_tailor)} matching jobs (out of {len(jobs_to_process)} total verified)...")
         
         updated_jobs = []
@@ -220,8 +223,9 @@ def generate_documents_for_all_jobs(args, outputs_dir):
                     cv_path=args.cv,
                     job=job,
                     model=args.openrouter_model,
-                    output_base_dir=outputs_dir
+                    output_base_dir=resumes_dir
                 )
+
                 if ats_score:
                     job["ats_score"] = ats_score
                     ats_str = str(ats_score)
@@ -342,8 +346,21 @@ def print_jobs_table(output_path: str):
                 site_val = site_val[0] if site_val else p_key.title()
             platform_name = str(site_val).strip()
             
+            # Filter to jobs with match score > 6
+            recommended_list = []
+            for job in jobs_list:
+                score_val = job.get("score")
+                try:
+                    if score_val is not None and int(score_val) > 6:
+                        recommended_list.append(job)
+                except (ValueError, TypeError):
+                    pass
+
+            if not recommended_list:
+                continue
+
             # Print Table Header
-            title_text = f"{platform_name} Jobs"
+            title_text = f"{platform_name} Jobs (Match Score > 6)"
             border = "-" * max(30, len(title_text))
             print(f"\n{border}")
             print(title_text)
@@ -353,7 +370,7 @@ def print_jobs_table(output_path: str):
             col_widths = {h: len(h) for h in headers}
             
             rows = []
-            for idx, job in enumerate(jobs_list, start=1):
+            for idx, job in enumerate(recommended_list, start=1):
                 raw_title = job.get("title", "")
                 title = " ".join(str(raw_title).replace("\n", " ").replace("\r", " ").split())
                 if len(title) > 30:
@@ -378,13 +395,7 @@ def print_jobs_table(output_path: str):
                     
                 score_val = job.get("score")
                 score_str = f"{score_val}/10" if score_val is not None else "N/A"
-                
-                try:
-                    is_above_6 = score_val is not None and int(score_val) > 6
-                except (ValueError, TypeError):
-                    is_above_6 = False
-                    
-                count_in = "✓" if is_above_6 else ""
+                count_in = "✓"
                 
                 row = [str(idx), title, company, location, exp, score_str, count_in]
                 rows.append(row)
@@ -401,6 +412,7 @@ def print_jobs_table(output_path: str):
             for row in rows:
                 print(format_str.format(*row))
             print("-" * len(sep_str) + "\n")
+
             
     except Exception as e:
         print(f"[Error] Failed to print summary table: {e}")
@@ -424,14 +436,15 @@ def main():
         print("=" * 60 + "\n")
         args.limit = 25
         
-    # Resolve outputs folder at project's root location
+    # Resolve data folder at project's root location
     project_root = os.path.dirname(os.path.abspath(__file__))
-    outputs_dir = os.path.abspath(args.output_dir) if args.output_dir else os.path.join(project_root, "outputs")
+    outputs_dir = os.path.abspath(args.output_dir) if args.output_dir else os.path.join(project_root, "data")
     os.makedirs(outputs_dir, exist_ok=True)
 
-    # Resolve Output Path to be inside the outputs directory
+    # Resolve Output Path to be inside the data directory
     args.output = os.path.abspath(args.output) if args.output else os.path.join(outputs_dir, "scraped_jobs.json")
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
+
 
     # 2. Resolve CV Path (Bug 2)
     cv_text = ""
@@ -502,14 +515,13 @@ def main():
                 model=args.groq_model
             )
             
-            print_match_scores_table(all_results, matched_results)
-            
             print_jobs_table(args.output)
             generate_documents_for_all_jobs(args, outputs_dir)
             
         except Exception as e:
             print(f"[Error] CV matching failed: {e}")
         return
+
 
     # 2. Otherwise run scraping as normal
     print("=" * 60)
@@ -622,12 +634,18 @@ def main():
             
         iteration += 1
 
-    # Keep all scraped and verified jobs instead of slicing by limit
-    processed_jobs = all_processed_jobs
+    # Keep only recommended jobs (score > 6) if CV was provided
+    if cv_text:
+        processed_jobs = [
+            j for j in all_processed_jobs 
+            if (j.get("score") is not None and int(j.get("score")) > 6)
+        ]
+    else:
+        processed_jobs = all_processed_jobs
     
     print_summary(total_raw_scraped, len(processed_jobs), total_new_inserted, total_updated_count)
     
-    # Export to output JSON file
+    # Export to output JSON file (only score > 6)
     export_to_json(processed_jobs, args.output)
 
 
@@ -640,7 +658,6 @@ def main():
                 model=args.groq_model
             )
             
-            print_match_scores_table(all_results, matched_results)
             print_jobs_table(args.output)
             generate_documents_for_all_jobs(args, outputs_dir)
             
@@ -649,8 +666,8 @@ def main():
     else:
         print(f"\n[CV Matcher Info] CV file '{args.cv}' not found. Skipping CV matching.")
         print("To run CV matching, please place your CV PDF file in the root folder (default name: cv.pdf) or specify the path via --cv.")
-    
-    print_jobs_table(args.output)
+        print_jobs_table(args.output)
+
 
 if __name__ == "__main__":
     main()
