@@ -3,6 +3,7 @@ import requests
 import json
 import time
 import re
+from datetime import datetime
 from typing import Dict, Any, Tuple
 from src.config import Config
 
@@ -316,6 +317,7 @@ Site: {job_details.get('site', 'N/A')}
         Generates customized cover letter data.
         Returns a dictionary containing the cover letter parameters.
         """
+        current_date = datetime.now().strftime("%B %d, %Y")
         job_info = f"Title: {job_details.get('title', 'N/A')}\nCompany: {job_details.get('company', 'N/A')}\nDescription: {job_details.get('about_job', 'N/A')}"
         system_prompt = (
             "You are an expert career consultant.\n"
@@ -329,7 +331,7 @@ Site: {job_details.get('site', 'N/A')}
             "{\n"
             "  \"recipient_name\": \"Hiring Manager or Recruitment Team\",\n"
             "  \"company_name\": \"Company Name\",\n"
-            "  \"date\": \"Current Date (e.g., July 6, 2026)\",\n"
+            f"  \"date\": \"{current_date}\",\n"
             "  \"subject\": \"Application for [Job Title] - [Candidate Name]\",\n"
             "  \"salutation\": \"Dear Hiring Manager,\",\n"
             "  \"opening_paragraph\": \"Introduction of the candidate, the role they are applying for, and why they are interested in the company.\",\n"
@@ -356,6 +358,7 @@ Site: {job_details.get('site', 'N/A')}
         clean_text = clean_text.strip()
         
         data = json.loads(clean_text)
+        data["date"] = current_date
         return {
             "data": data,
             "usage": usage_stats

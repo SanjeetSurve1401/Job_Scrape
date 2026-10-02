@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+from datetime import datetime
 import requests
 import docx
 from docx.shared import Inches, Pt, RGBColor
@@ -145,7 +146,8 @@ def generate_pdf_cover_letter(cl_data: dict, output_path: str):
     recipient_style = ParagraphStyle('CLRecipient', parent=styles['Normal'], fontSize=11, leading=15, textColor=colors.HexColor('#2D3748'), spaceAfter=10)
     subject_style = ParagraphStyle('CLSubject', parent=styles['Normal'], fontSize=11, leading=15, fontName='Helvetica-Bold', textColor=colors.HexColor('#1A365D'), spaceAfter=12)
 
-    story.append(Paragraph(cl_data.get('date', 'July 6, 2026'), date_style))
+    current_date = cl_data.get('date') or datetime.now().strftime("%B %d, %Y")
+    story.append(Paragraph(current_date, date_style))
     story.append(Paragraph(cl_data.get('recipient_name', 'Hiring Manager / Recruiter'), recipient_style))
     story.append(Paragraph(cl_data.get('company_name', 'Company Name'), recipient_style))
     story.append(Spacer(1, 8))
@@ -351,7 +353,8 @@ def generate_docx_cover_letter(cl_data: dict, output_path: str):
         run.font.color.rgb = color
         return p
 
-    add_p(cl_data.get('date', 'July 6, 2026'), space_after=15)
+    current_date = cl_data.get('date') or datetime.now().strftime("%B %d, %Y")
+    add_p(current_date, space_after=15)
     add_p(cl_data.get('recipient_name', 'Hiring Manager / Recruiter'), space_after=2)
     add_p(cl_data.get('company_name', 'Company Name'), space_after=10)
     add_p(cl_data.get('subject', 'Application'), bold=True, color=navy_blue, space_after=12)
@@ -381,6 +384,8 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         
         print(f"  [Tailoring Cover Letter] Calling LLM (Claude) for '{job.get('title')}' at '{job.get('company')}'...")
         cl_data = get_tailored_cl_data(client, cv_text, job)
+        if cl_data and isinstance(cl_data, dict):
+            cl_data['date'] = datetime.now().strftime("%B %d, %Y")
         if hasattr(client, 'last_usage') and client.last_usage:
             accumulate_job_tokens(job, client.last_usage)
         
