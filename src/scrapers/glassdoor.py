@@ -11,6 +11,7 @@ from src.config import Config
 from src.scrapers.base import BaseScraper
 from src.scrapers import register_scraper
 from src.models import Job
+from glassdoor_login import STEALTH_JS, DEFAULT_MAC_UA
 
 @register_scraper
 class GlassdoorScraper(BaseScraper):
@@ -193,27 +194,46 @@ class GlassdoorScraper(BaseScraper):
             browser = None
             context = None
             
+            browser_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-infobars",
+                "--disable-dev-shm-usage",
+            ]
+            user_agent = Config.GLASSDOOR_USER_AGENT if Config.GLASSDOOR_USER_AGENT and Config.GLASSDOOR_USER_AGENT.strip() else DEFAULT_MAC_UA
+
             try:
                 if storage_state:
                     # Use storage state in a clean browser session
-                    browser = p.chromium.launch(headless=True)
+                    browser = p.chromium.launch(
+                        headless=True,
+                        args=browser_args,
+                        ignore_default_args=["--enable-automation"]
+                    )
                     context = browser.new_context(
                         storage_state=storage_state,
-                        user_agent=Config.GLASSDOOR_USER_AGENT
+                        user_agent=user_agent,
+                        viewport={"width": 1280, "height": 800}
                     )
+                    context.add_init_script(STEALTH_JS)
                 else:
                     # Fallback to persistent context folder
                     if not os.path.exists(user_data_dir):
                         print("[Glassdoor ERROR] No storage state in .env or session directory found! Run glassdoor_login.py first.")
                         return []
-                    # Silenced persistent session print
-                    context = p.chromium.launch_persistent_context(
-                        user_data_dir=user_data_dir,
-                        headless=True,
-                        channel="chrome",
-                        args=["--disable-blink-features=AutomationControlled"],
-                        ignore_default_args=["--enable-automation"]
-                    )
+                    launch_kwargs = {
+                        "user_data_dir": user_data_dir,
+                        "headless": True,
+                        "args": browser_args,
+                        "ignore_default_args": ["--enable-automation"],
+                        "user_agent": user_agent,
+                        "viewport": {"width": 1280, "height": 800}
+                    }
+                    try:
+                        context = p.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+                    except Exception:
+                        context = p.chromium.launch_persistent_context(**launch_kwargs)
+                    context.add_init_script(STEALTH_JS)
             except Exception as e:
                 print(f"[Glassdoor ERROR] Could not launch Playwright browser context: {e}")
                 return []

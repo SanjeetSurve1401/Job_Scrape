@@ -219,6 +219,8 @@ def generate_documents_for_all_jobs(args, outputs_dir):
             
             if is_target:
                 print(f"\n[{tailor_idx}/{len(target_tailor)}] Processing documents for '{title}' at '{company}'...")
+                if "sr_no" not in job or job["sr_no"] is None:
+                    job["sr_no"] = idx
                 ats_score = generate_tailored_documents(
                     cv_path=args.cv,
                     job=job,
@@ -419,6 +421,13 @@ def print_jobs_table(output_path: str):
 
 
 def main():
+    args = parse_args()
+
+    # Resolve data folder at project's root location
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    outputs_dir = os.path.abspath(args.output_dir) if args.output_dir else os.path.join(project_root, "data")
+    os.makedirs(outputs_dir, exist_ok=True)
+
     # Verify environment variables
     from src.config import Config
     
@@ -427,24 +436,16 @@ def main():
         print("[ERROR] CLAUDE_API is not set in the .env file. Execution stopped.")
         return
         
-    args = parse_args()
-    
     # Restrict limit to 25 and warn if it is higher
     if args.limit > 25:
         print("\n" + "=" * 60)
         print("[Warning] Maximum limit is 25 only. Adjusting limit to 25.")
         print("=" * 60 + "\n")
         args.limit = 25
-        
-    # Resolve data folder at project's root location
-    project_root = os.path.dirname(os.path.abspath(__file__))
-    outputs_dir = os.path.abspath(args.output_dir) if args.output_dir else os.path.join(project_root, "data")
-    os.makedirs(outputs_dir, exist_ok=True)
 
     # Resolve Output Path to be inside the data directory
     args.output = os.path.abspath(args.output) if args.output else os.path.join(outputs_dir, "scraped_jobs.json")
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
-
 
     # 2. Resolve CV Path (Bug 2)
     cv_text = ""

@@ -386,7 +386,11 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         
         company_clean = sanitize_filename(job.get('company', 'Unknown_Company'))
         title_clean = sanitize_filename(job.get('title', 'Unknown_Title'))
-        folder_name = f"{company_clean}_{title_clean}"
+        sr_no = job.get('sr_no')
+        if sr_no is not None:
+            folder_name = f"{sr_no}_{company_clean}_{title_clean}"
+        else:
+            folder_name = f"{company_clean}_{title_clean}"
         target_dir = os.path.join(output_base_dir, folder_name)
         os.makedirs(target_dir, exist_ok=True)
         

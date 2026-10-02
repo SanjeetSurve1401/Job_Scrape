@@ -30,6 +30,34 @@ def update_env_file(key, value, filepath=".env"):
     with open(filepath, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
 
+STEALTH_JS = """
+// Overwrite the 'webdriver' property to prevent bot detection
+Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined
+});
+
+// Mock chrome runtime
+if (!window.chrome) {
+    window.chrome = {};
+}
+window.chrome.runtime = {
+    connect: function() {},
+    sendMessage: function() {}
+};
+
+// Mock plugins
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [1, 2, 3, 4, 5],
+});
+
+// Mock languages
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en'],
+});
+"""
+
+DEFAULT_MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+
 def run_playwright_login():
     try:
         from playwright.sync_api import sync_playwright
@@ -44,7 +72,7 @@ def run_playwright_login():
             print(f"[ERROR] Playwright install failed: {e}")
             return None
 
-    print("\nOpening Real Chrome browser for Glassdoor login. Please log in manually...")
+    print("\nOpening Stealth Browser for Glassdoor login. Please log in manually...")
     try:
         with sync_playwright() as p:
             user_data_dir = os.path.abspath("./playwright_glassdoor_session")
@@ -55,40 +83,60 @@ def run_playwright_login():
                 except Exception:
                     pass
                     
+            browser_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-infobars",
+                "--disable-dev-shm-usage",
+            ]
+
+            context = None
+            # 1. Try launching with system Google Chrome if present
             try:
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
                     headless=False,
                     channel="chrome",
-                    args=["--disable-blink-features=AutomationControlled"],
-                    ignore_default_args=["--enable-automation"]
+                    args=browser_args,
+                    ignore_default_args=["--enable-automation"],
+                    user_agent=DEFAULT_MAC_UA,
+                    viewport={"width": 1280, "height": 800}
                 )
-            except Exception as e:
-                print(f"[INFO] Real Chrome could not be launched ({e}). Falling back to WebKit...")
-                import subprocess
-                subprocess.run([sys.executable, "-m", "playwright", "install", "webkit"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                context = p.webkit.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    headless=False
-                )
-                
-            page = context.pages[0] if context.pages else context.new_page()
-            
-            try:
-                user_agent = page.evaluate("navigator.userAgent")
             except Exception:
-                user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                # 2. If Chrome is not installed, use Playwright's bundled Chromium with stealth
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    headless=False,
+                    args=browser_args,
+                    ignore_default_args=["--enable-automation"],
+                    user_agent=DEFAULT_MAC_UA,
+                    viewport={"width": 1280, "height": 800}
+                )
                 
-            page.goto("https://www.glassdoor.com/member/profile/login")
+            # Apply stealth evasions on the browser context
+            context.add_init_script(STEALTH_JS)
+            
+            page = context.pages[0] if context.pages else context.new_page()
+            user_agent = DEFAULT_MAC_UA
+            
+            page.goto("https://www.glassdoor.com/member/profile/login", wait_until="domcontentloaded")
             
             print("Waiting for login... (Complete login in the browser window)")
             
             detected = False
             for _ in range(150):
                 cookies = context.cookies()
-                has_auth_token = any(c['name'] == 'at' for c in cookies)
+                has_auth_token = any(c['name'] in ('at', 'as_at', 'GD_SESSION_ID', 'gdId') for c in cookies)
                 
-                if has_auth_token:
+                # Also verify if user was redirected past login
+                current_url = page.url.lower()
+                redirected_to_member = (
+                    "glassdoor.com" in current_url
+                    and not any(x in current_url for x in ["member/profile/login", "/login", "security", "__cf_chl"])
+                    and any(x in current_url for x in ["/job", "/member", "/feed", "/community", "/reviews"])
+                )
+                
+                if has_auth_token or redirected_to_member:
                     print("\n[INFO] Login successfully detected!")
                     detected = True
                     break

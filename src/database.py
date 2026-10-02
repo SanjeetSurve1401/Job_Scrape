@@ -146,6 +146,11 @@ class LocalDatabaseHandler(DatabaseInterface):
                 self.conn.commit()
             except Exception:
                 pass
+            try:
+                self.cursor.execute("ALTER TABLE jobs ADD COLUMN tailored_documents TEXT")
+                self.conn.commit()
+            except Exception:
+                pass
             self.conn.commit()
             print(f"Initialized local SQLite database fallback at '{self.filename}'.")
         except Exception as e:
