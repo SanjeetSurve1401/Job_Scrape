@@ -148,6 +148,16 @@ class JobVerifier(VerifierInterface):
         if not role_keywords:
             role_keywords = [role_lower]
             
+        # Separate QA/Testing roles from Developer/Software Engineer roles
+        qa_terms = ["qa", "test", "tester", "testing", "sdet", "quality assurance"]
+        req_has_qa = any(re.search(r'\b' + re.escape(w) + r'\b', role_lower) for w in qa_terms)
+        title_has_qa = any(re.search(r'\b' + re.escape(w) + r'\b', title_lower) for w in qa_terms)
+
+        if not req_has_qa and title_has_qa:
+            return False
+        if req_has_qa and not title_has_qa:
+            return False
+
         # Count keyword matches
         match_count = sum(1 for kw in role_keywords if kw in title_lower)
         
