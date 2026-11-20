@@ -15,8 +15,31 @@ class Config:
     GROQ_API = os.getenv("GROQ_API", "")
     OPENROUTER_API = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_API", "")
     CLAUDE_API = os.getenv("CLAUDE_API") or os.getenv("CLAUDE_API_KEY", "")
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     LINKEDIN_COOKIE = os.getenv("LINKEDIN_COOKIE", "")
     LINKEDIN_USER_AGENT = os.getenv("LINKEDIN_USER_AGENT", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     LINKEDIN_STORAGE_STATE = os.getenv("LINKEDIN_STORAGE_STATE", "")
     CV_PATH = os.getenv("CV_PATH", "")
+
+    # Dynamic provider selection based on API_KEY env var
+    # API_KEY=CLAUDE_API_KEY  -> use Claude
+    # API_KEY=GOOGLE_API_KEY  -> use Google Gemini
+    _API_KEY_RAW = os.getenv("API_KEY", "").strip()
+
+    @classmethod
+    def get_active_provider(cls) -> str:
+        """Returns 'claude' or 'google' based on API_KEY value in .env"""
+        val = cls._API_KEY_RAW.upper()
+        if val in ("GOOGLE_API_KEY", "GOOGLE", "GEMINI"):
+            return "google"
+        # Default to claude (backward compatible)
+        return "claude"
+
+    @classmethod
+    def get_active_api_key(cls) -> str:
+        """Returns the actual API key string for the active provider."""
+        provider = cls.get_active_provider()
+        if provider == "google":
+            return cls.GOOGLE_API_KEY
+        return cls.CLAUDE_API
 

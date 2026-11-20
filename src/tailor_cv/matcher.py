@@ -2,13 +2,13 @@ import os
 import json
 from typing import List, Dict, Any, Tuple
 from src.tailor_cv.pdf_parser import extract_text_from_pdf
-from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens, get_llm_client
 
 def run_cv_matching(
     cv_path: str,
     jobs_json_path: str,
     api_key: str = None,
-    model: str = "claude-3-5-haiku-20241022"
+    model: str = None
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Reads the CV from a PDF file, loops over job details in a JSON file,
@@ -31,8 +31,8 @@ def run_cv_matching(
     with open(jobs_json_path, 'r', encoding='utf-8') as f:
         jobs = json.load(f)
     
-    # 3. Initialize Claude Client
-    client = ClaudeClient(api_key=api_key, model=model)
+    # 3. Initialize LLM Client (Claude or Google depending on API_KEY in .env)
+    client = get_llm_client(model=model, api_key=api_key)
     
     all_results = []
     matched_results = []

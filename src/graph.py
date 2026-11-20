@@ -9,7 +9,7 @@ from src.scrapers.linkedin import LinkedInScraper
 from src.scrapers.glassdoor import GlassdoorScraper
 from src.verifier import JobVerifier
 from src.database import DatabaseHandler, LocalDatabaseHandler
-from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens, get_llm_client
 
 class ScraperState(TypedDict):
     role: str
@@ -68,11 +68,12 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
     processed_jobs = []
     
     client = None
-    if cv_text and Config.CLAUDE_API and Config.CLAUDE_API.strip():
+    active_key = Config.get_active_api_key()
+    if cv_text and active_key and active_key.strip():
         try:
-            client = ClaudeClient(model=state.get("groq_model", "claude-3-5-haiku-20241022"))
+            client = get_llm_client(model=state.get("groq_model"))
         except Exception as e:
-            print(f"[LangGraph Score Node Error] Failed to initialize Claude Client: {e}")
+            print(f"[LangGraph Score Node Error] Failed to initialize LLM Client: {e}")
             
     for job in verified_jobs:
         job_dict = job.to_dict()

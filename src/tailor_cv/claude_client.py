@@ -7,6 +7,28 @@ from datetime import datetime
 from typing import Dict, Any, Tuple
 from src.config import Config
 
+
+def get_llm_client(model: str = None, api_key: str = None, max_budget: float = None):
+    """
+    Factory: returns ClaudeClient or GoogleClient based on API_KEY in .env.
+    API_KEY=CLAUDE_API_KEY  -> ClaudeClient
+    API_KEY=GOOGLE_API_KEY  -> GoogleClient
+    """
+    provider = Config.get_active_provider()
+    if provider == "google":
+        from src.tailor_cv.google_client import GoogleClient
+        return GoogleClient(
+            api_key=api_key or Config.GOOGLE_API_KEY,
+            model=model,
+            max_budget=max_budget,
+        )
+    # default: claude
+    return ClaudeClient(
+        api_key=api_key or Config.CLAUDE_API,
+        model=model or "claude-haiku-4-5-20251001",
+        max_budget=max_budget,
+    )
+
 def accumulate_job_tokens(job_dict: dict, usage: dict):
     """
     Accumulates token usage and costs into a job's metadata.

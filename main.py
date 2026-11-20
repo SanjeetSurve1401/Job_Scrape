@@ -80,8 +80,8 @@ def process_and_save_jobs(db: DatabaseInterface, verifier: JobVerifier, raw_jobs
     # Instantiate ClaudeClient if matching is requested
     client = None
     if cv_text:
-        from src.tailor_cv.claude_client import ClaudeClient
-        client = ClaudeClient(model=args.groq_model)
+        from src.tailor_cv.claude_client import get_llm_client
+        client = get_llm_client(model=args.groq_model)
 
     from src.database import DatabaseHandler
     is_mongodb = isinstance(db, DatabaseHandler)
@@ -431,10 +431,13 @@ def main():
     # Verify environment variables
     from src.config import Config
     
-    # Check Claude API
-    if not Config.CLAUDE_API or not Config.CLAUDE_API.strip():
-        print("[ERROR] CLAUDE_API is not set in the .env file. Execution stopped.")
+    # Check active API key (Claude or Google based on API_KEY in .env)
+    active_provider = Config.get_active_provider()
+    active_key = Config.get_active_api_key()
+    if not active_key or not active_key.strip():
+        print(f"[ERROR] Active provider is '{active_provider}' but its API key is not set in .env. Execution stopped.")
         return
+    print(f"[Config] Active LLM Provider: {active_provider.upper()}")
         
     # Restrict limit to 25 and warn if it is higher
     if args.limit > 25:

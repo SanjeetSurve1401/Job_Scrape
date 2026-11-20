@@ -12,7 +12,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from src.tailor_cv.pdf_parser import extract_text_from_pdf
-from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
+from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens, get_llm_client
 
 def sanitize_filename(name: str) -> str:
     clean = re.sub(r'[^a-zA-Z0-9_\-]', '_', name)
@@ -372,17 +372,19 @@ def generate_tailored_documents(cv_path: str, job: dict, model: str, output_base
         from src.tailor_cv.pdf_parser import extract_text_from_pdf
         cv_text = extract_text_from_pdf(cv_path)
         
-        from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens
-        client = ClaudeClient(model=model)
+        from src.tailor_cv.claude_client import accumulate_job_tokens, get_llm_client
+        client = get_llm_client(model=model)
         
-        print(f"  \n[Tailoring CV] Calling LLM (Claude) for '{job.get('title')}' at '{job.get('company')}'...\n")
+        from src.config import Config
+        provider_name = Config.get_active_provider().upper()
+        print(f"  \n[Tailoring CV] Calling LLM ({provider_name}) for '{job.get('title')}' at '{job.get('company')}'...\n")
         cv_data = get_tailored_cv_data(client, cv_text, job)
         if hasattr(client, 'last_usage') and client.last_usage:
             accumulate_job_tokens(job, client.last_usage)
         
         time.sleep(2.0)
         
-        print(f"  [Tailoring Cover Letter] Calling LLM (Claude) for '{job.get('title')}' at '{job.get('company')}'...")
+        print(f"  [Tailoring Cover Letter] Calling LLM ({provider_name}) for '{job.get('title')}' at '{job.get('company')}'...")
         cl_data = get_tailored_cl_data(client, cv_text, job)
         if cl_data and isinstance(cl_data, dict):
             cl_data['date'] = datetime.now().strftime("%B %d, %Y")
