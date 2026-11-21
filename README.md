@@ -87,6 +87,7 @@ Create or edit your `.env` file in the root directory. Below is the reference co
 | **Scrape Limit** | `--limit` | `Integer`| `15` | Total maximum number of raw/verified jobs to fetch. Capped at **25**. | `10`, `20` |
 | **Output File** | `--output` | `String` | `"outputs/scraped_jobs.json"` | JSON file path where verified jobs (Score > 6) are exported. | `"outputs/scraped_jobs.json"` |
 | **Claude Model** | `--claude-model` | `String` | `"claude haiku 4.5"` | Claude model used for CV matching. | `"claude haiku 4.5"` |
+| **Manual Input** | `--manual` | `String` | `None` | Local JSON file path or web URL containing company jobs to evaluate and tailor directly without scraping. | `"data/manual_jobs.json"`, `"https://api.example.com/jobs.json"` |
 
 ---
 
@@ -106,6 +107,33 @@ python3 main.py --role "Software Engineer" --location "Pune" --experience "1-3 y
 ```bash
 python3 main.py --role "QA Engineer" --location "Remote" --experience "1 year" --sources linkedin --cv resume.pdf
 ```
+
+#### 4. Manual JSON Mode (From Local File):
+```bash
+python3 main.py --manual data/manual_jobs.json
+```
+
+#### 5. Manual JSON Mode (From Direct Web URL):
+```bash
+python3 main.py --manual "https://example.com/api/jobs.json"
+```
+
+---
+
+## Manual JSON Mode (Direct ATS & Resume / Cover Letter Generation)
+
+The engine allows bypassing web scraping entirely by providing a local JSON file or direct web URL containing job postings.
+
+### How It Works:
+1. **URL & File Ingestion**: Automatically detects whether `--manual` is a local path or a web link (`http://` or `https://`), downloading and parsing the content securely.
+2. **Smart Key Normalization**: Accommodates varying JSON structures and automatically standardizes fields like `role`/`title`, `company`/`org`, and `description`/`about_job`.
+3. **ATS Alignment Evaluation**: Evaluates every job posting against the candidate's CV and assigns a match score (0-10) with detailed explanations.
+4. **Non-Aligned Jobs Table with Explanations**: Postings with match score $\le$ 6 are categorized as non-aligned and displayed in a dedicated table showing exactly why the candidate's CV did not match the role requirements.
+5. **Interactive User Choice**: Prompts the user in the console to select whether documents should be generated for **Aligned Jobs Only (Score > 6)** or **All Jobs**.
+6. **Multi-Format Document Generation**: For each selected job, generates:
+   - **Tailored CV / Resume**: PDF (`tailored_cv.pdf`), Word (`tailored_cv.docx`), and LaTeX (`tailored_resume.tex`).
+   - **Tailored Cover Letter**: PDF (`cover_letter.pdf`) and Word (`cover_letter.docx`).
+   - **Metadata**: JSON file (`job_details.json`) containing full job details, match score, and token usage.
 
 ---
 

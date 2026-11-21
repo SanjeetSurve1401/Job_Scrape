@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--groq-model", type=str, default=None, help="Deprecated: Use --claude-model instead")
     parser.add_argument("--openrouter-model", type=str, default=None, help="Deprecated: Use --claude-model instead")
     parser.add_argument("--sources", type=str, default="linkedin,glassdoor", help="Comma-separated list of job sources to scrape (default: 'linkedin,glassdoor')")
+    parser.add_argument("--manual", type=str, default=None, help="Path to a manual JSON file with company jobs to tailor directly without scraping")
     
     args = parser.parse_args()
     if not args.groq_model:
@@ -164,6 +165,44 @@ def export_to_json(saved_jobs: List[dict], output_path: str):
     except Exception as e:
         print(f"Error writing to JSON output file: {e}")
 
+def render_box_table(title: str, headers: List[str], col_widths: List[int], rows: List[List[str]], wrap_col_idx: int = -1):
+    """Renders a sleek terminal table using Unicode box-drawing characters."""
+    top_border = "┌─" + "─┬─".join(["─" * w for w in col_widths]) + "─┐"
+    header_sep = "├─" + "─┼─".join(["─" * w for w in col_widths]) + "─┤"
+    row_sep    = "├─" + "─┼─".join(["─" * w for w in col_widths]) + "─┤"
+    bot_border = "└─" + "─┴─".join(["─" * w for w in col_widths]) + "─┘"
+    format_str = "│ " + " │ ".join([f"{{:<{w}}}" for w in col_widths]) + " │"
+    
+    if title:
+        print("\n" + title)
+    print(top_border)
+    print(format_str.format(*headers))
+    print(header_sep)
+    
+    import textwrap
+    for r_idx, row in enumerate(rows):
+        if wrap_col_idx >= 0 and wrap_col_idx < len(row):
+            wrap_text = str(row[wrap_col_idx])
+            wrapped_lines = textwrap.wrap(wrap_text, width=col_widths[wrap_col_idx]) or [""]
+            
+            # First line
+            first_row = list(row)
+            first_row[wrap_col_idx] = wrapped_lines[0]
+            print(format_str.format(*first_row))
+            
+            # Subsequent lines
+            for extra_line in wrapped_lines[1:]:
+                sub_row = [""] * len(row)
+                sub_row[wrap_col_idx] = extra_line
+                print(format_str.format(*sub_row))
+        else:
+            print(format_str.format(*row))
+            
+        if r_idx < len(rows) - 1:
+            print(row_sep)
+            
+    print(bot_border + "\n")
+
 def print_summary(total_scraped: int, verified_count: int, new_inserted: int, updated_count: int):
     """Prints execution stats summary."""
     print("\n" + "=" * 60)
@@ -218,27 +257,41 @@ def generate_documents_for_all_jobs(args, outputs_dir):
             ats_str = "N/A"
             
             if is_target:
-                print(f"\n[{tailor_idx}/{len(target_tailor)}] Processing documents for '{title}' at '{company}'...")
-                if "sr_no" not in job or job["sr_no"] is None:
-                    job["sr_no"] = idx
-                ats_score = generate_tailored_documents(
-                    cv_path=args.cv,
-                    job=job,
-                    model=args.openrouter_model,
-                    output_base_dir=resumes_dir
-                )
-
-                if ats_score:
-                    job["ats_score"] = ats_score
-                    ats_str = str(ats_score)
-                    status_str = "Tailored"
-                else:
-                    status_str = "Failed"
-                tailor_idx += 1
+                from src.tailor_cv.generator import sanitize_filename
+                comp_clean = sanitize_filename(company)
+                tit_clean = sanitize_filename(title)
+                target_folder = os.path.join(resumes_dir, f"{idx}_{comp_clean}_{tit_clean}")
+                pdf_exists = os.path.exists(os.path.join(target_folder, "tailored_cv.pdf"))
+                docx_exists = os.path.exists(os.path.join(target_folder, "tailored_cv.docx"))
                 
-                if tailor_idx <= len(target_tailor):
-                    import time
-                    time.sleep(10.0)
+                if pdf_exists and docx_exists and job.get("ats_score"):
+                    print(f"\n[{tailor_idx}/{len(target_tailor)}] [Skipped Existing Documents] Documents already exist for '{title}' at '{company}'. Reusing to save API tokens.")
+                    ats_score = job.get("ats_score")
+                    ats_str = str(ats_score)
+                    status_str = "Tailored (Cached)"
+                    tailor_idx += 1
+                else:
+                    print(f"\n[{tailor_idx}/{len(target_tailor)}] Processing documents for '{title}' at '{company}'...")
+                    if "sr_no" not in job or job["sr_no"] is None:
+                        job["sr_no"] = idx
+                    ats_score = generate_tailored_documents(
+                        cv_path=args.cv,
+                        job=job,
+                        model=args.openrouter_model,
+                        output_base_dir=resumes_dir
+                    )
+
+                    if ats_score:
+                        job["ats_score"] = ats_score
+                        ats_str = str(ats_score)
+                        status_str = "Tailored"
+                    else:
+                        status_str = "Failed"
+                    tailor_idx += 1
+                    
+                    if tailor_idx <= len(target_tailor):
+                        import time
+                        time.sleep(10.0)
             else:
                 score_val = job.get("score")
                 status_str = f"Skipped (Score {score_val}/10)"
@@ -256,22 +309,16 @@ def generate_documents_for_all_jobs(args, outputs_dir):
             json.dump(updated_jobs, f, indent=2, ensure_ascii=False)
             
         headers = ["No", "Job Title", "Company", "Status", "ATS Score"]
-        col_widths = [4, 35, 20, 22, 11]
-        format_str = "| " + " | ".join([f"{{:<{w}}}" for w in col_widths]) + " |"
-        sep_str = "|-" + "-|-".join(["-" * w for w in col_widths]) + "-|"
-        
-        print("\n" + "=" * 90)
-        print("GENERATING TAILORED CV AND COVER LETTER FOR EACH JOB POSTING")
-        print("=" * 90)
-        print(format_str.format(*headers))
-        print(sep_str)
+        col_widths = [2, 22, 15, 15, 9]
+        rows = []
         for res in generation_results:
             clean_title = " ".join(str(res['title']).replace("\n", " ").replace("\r", " ").split())
             clean_comp = " ".join(str(res['company']).replace("\n", " ").replace("\r", " ").split())
-            t_title = clean_title[:32] + "..." if len(clean_title) > 35 else clean_title
-            t_company = clean_comp[:17] + "..." if len(clean_comp) > 20 else clean_comp
-            print(format_str.format(str(res['no']), t_title, t_company, res['status'], res['ats_score']))
-        print("-" * len(sep_str) + "\n")
+            t_title = clean_title[:20] + "..." if len(clean_title) > 22 else clean_title
+            t_company = clean_comp[:13] + "..." if len(clean_comp) > 15 else clean_comp
+            rows.append([str(res['no']), t_title, t_company, res['status'], res['ats_score']])
+            
+        render_box_table("GENERATING TAILORED CV AND COVER LETTER FOR EACH JOB POSTING", headers, col_widths, rows)
         
     except Exception as e:
         print(f"[Error] Failed to run document generation: {e}")
@@ -405,19 +452,281 @@ def print_jobs_table(output_path: str):
                     h = headers[i]
                     col_widths[h] = max(col_widths[h], len(val))
                     
-            # Build formatting strings for a nice table
-            format_str = "| " + " | ".join([f"{{:<{col_widths[h]}}}" for h in headers]) + " |"
-            sep_str = "|-" + "-|-".join(["-" * col_widths[h] for h in headers]) + "-|"
-            
-            print(format_str.format(*headers))
-            print(sep_str)
-            for row in rows:
-                print(format_str.format(*row))
-            print("-" * len(sep_str) + "\n")
+            render_box_table(
+                title_text,
+                headers,
+                [col_widths[h] for h in headers],
+                rows
+            )
 
             
     except Exception as e:
         print(f"[Error] Failed to print summary table: {e}")
+
+
+def normalize_job_dict(raw: dict) -> dict:
+    """Normalizes non-standard JSON keys into standard job fields."""
+    def get_val(keys, default=""):
+        for k in keys:
+            if k in raw and raw[k] is not None:
+                val = str(raw[k]).strip()
+                if val:
+                    return val
+        return default
+
+    title = get_val(["title", "job_title", "role", "position", "jobRole", "job_name"], "Unknown Role")
+    company = get_val(["company", "company_name", "employer", "org", "organization"], "Unknown Company")
+    about_job = get_val(["about_job", "description", "job_description", "details", "summary", "jobSummary", "desc"], "")
+    location = get_val(["location", "job_location", "city", "work_location", "place"], "N/A")
+    experience = get_val(["experience_required", "experience", "exp", "years_of_experience", "req_exp"], "N/A")
+    url = get_val(["url", "job_url", "link", "apply_url"], "")
+
+    # Handle rich compensation structures
+    comp = raw.get("compensation") or raw.get("salary")
+    if isinstance(comp, dict):
+        salary = comp.get("summary") or comp.get("pay") or comp.get("formatted") or str(comp)
+    elif comp:
+        salary = str(comp)
+    else:
+        salary = None
+
+    # Handle list-based fields (responsibilities, must-have skills, requirements)
+    details_parts = []
+    if raw.get("responsibilities"):
+        resp = raw["responsibilities"]
+        if isinstance(resp, list):
+            details_parts.append("Key Responsibilities:\n" + "\n".join(f"- {r}" for r in resp))
+        elif isinstance(resp, str):
+            details_parts.append(f"Key Responsibilities:\n{resp}")
+            
+    if raw.get("must_have_skills"):
+        skills = raw["must_have_skills"]
+        if isinstance(skills, list):
+            details_parts.append("Must-Have Skills:\n" + ", ".join(skills))
+        elif isinstance(skills, str):
+            details_parts.append(f"Must-Have Skills:\n{skills}")
+            
+    if raw.get("requirements") or raw.get("qualifications"):
+        reqs = raw.get("requirements") or raw.get("qualifications")
+        if isinstance(reqs, list):
+            details_parts.append("Requirements & Qualifications:\n" + "\n".join(f"- {r}" for r in reqs))
+        elif isinstance(reqs, str):
+            details_parts.append(f"Requirements & Qualifications:\n{reqs}")
+            
+    if details_parts:
+        extra_text = "\n\n".join(details_parts)
+        about_job = (about_job + "\n\n" + extra_text).strip() if about_job else extra_text
+
+    if not about_job:
+        about_job = f"Job Title: {title}. Company: {company}. Location: {location}."
+
+    return {
+        "title": title,
+        "company": company,
+        "about_job": about_job,
+        "location": location,
+        "experience_required": experience,
+        "salary": salary,
+        "url": url
+    }
+
+def fetch_manual_jobs_data(source: str) -> list:
+    """Loads and parses JSON data from a URL or local file path."""
+    source = source.strip()
+    content = ""
+    if source.startswith("http://") or source.startswith("https://"):
+        import urllib.request
+        print(f"\n[Manual Mode] Fetching JSON from URL: {source}...")
+        req = urllib.request.Request(
+            source,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            content = resp.read().decode("utf-8", errors="ignore")
+    else:
+        local_path = os.path.abspath(source)
+        if not os.path.exists(local_path):
+            raise FileNotFoundError(f"Manual input JSON file not found at '{local_path}'.")
+        with open(local_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+    data = json.loads(content)
+    
+    # Handle dict with list property (e.g. {"jobs": [...]})
+    if isinstance(data, dict):
+        for k in ["jobs", "data", "postings", "results", "items"]:
+            if k in data and isinstance(data[k], list):
+                data = data[k]
+                break
+        if isinstance(data, dict):
+            data = [data]
+
+    if not isinstance(data, list):
+        raise ValueError("JSON must contain an array of jobs or an object with a jobs list.")
+
+    return [normalize_job_dict(item) for item in data if isinstance(item, dict)]
+
+def run_manual_mode(args, outputs_dir: str):
+    """Processes jobs from a manual JSON file or URL directly without scraping, generating ATS scores, PDF, Word, and LaTeX documents."""
+    try:
+        manual_jobs = fetch_manual_jobs_data(args.manual)
+    except Exception as e:
+        print(f"[Error] Failed to load manual JSON data: {e}")
+        return
+        
+    if not manual_jobs:
+        print("[Error] No valid jobs found in input.")
+        return
+        
+    print("\n" + "=" * 60)
+    print(f"Running Manual Mode for {len(manual_jobs)} Jobs from: {args.manual}")
+    print(f"CV: {args.cv}")
+    print("=" * 60)
+    
+    # 1. Extract CV Text
+    from src.tailor_cv.pdf_parser import extract_text_from_pdf
+    try:
+        cv_text = extract_text_from_pdf(args.cv)
+    except Exception as e:
+        print(f"[Error] Failed to read CV PDF: {e}")
+        return
+        
+    # 2. Score All Jobs Against CV
+    from src.tailor_cv.claude_client import get_llm_client
+    client = get_llm_client(model=args.groq_model)
+    
+    print("\n[ATS Matching] Evaluating alignment for each job posting against your CV...")
+    for idx, job in enumerate(manual_jobs, 1):
+        print(f"  [{idx}/{len(manual_jobs)}] Scoring '{job['title']}' at '{job['company']}'...")
+        try:
+            res = client.get_match_score(cv_text, job)
+            job["score"] = res.get("score", 0)
+            job["explanation"] = res.get("explanation", "No explanation provided.")
+        except Exception as e:
+            print(f"    -> Scoring error: {e}")
+            job["score"] = 0
+            job["explanation"] = f"Scoring error: {e}"
+        import time
+        time.sleep(2.0)
+        
+    # 3. Categorize Aligned vs Non-Aligned
+    aligned_jobs = [j for j in manual_jobs if (j.get("score") or 0) > 6]
+    non_aligned_jobs = [j for j in manual_jobs if (j.get("score") or 0) <= 6]
+    
+    # 4. Display Non-Aligned Jobs Table with Explanations
+    if non_aligned_jobs:
+        headers_na = ["No", "Role", "Company", "Score", "Why Not Aligned"]
+        col_widths_na = [2, 17, 13, 5, 33]
+        rows_na = []
+        for idx, j in enumerate(non_aligned_jobs, 1):
+            t = j['title'][:14] + "..." if len(j['title']) > 17 else j['title']
+            c = j['company'][:10] + "..." if len(j['company']) > 13 else j['company']
+            s = f"{j.get('score', 0)}/10"
+            exp = " ".join(j.get('explanation', '').replace("\n", " ").split())
+            rows_na.append([str(idx), t, c, s, exp])
+            
+        render_box_table(
+            "NON-ALIGNED JOBS (MATCH SCORE <= 6)",
+            headers_na,
+            col_widths_na,
+            rows_na,
+            wrap_col_idx=4
+        )
+        
+    # 5. Display Aligned Jobs
+    if aligned_jobs:
+        headers_a = ["No", "Role", "Company", "Score"]
+        col_widths_a = [2, 22, 15, 6]
+        rows_a = []
+        for idx, j in enumerate(aligned_jobs, 1):
+            t = j['title'][:19] + "..." if len(j['title']) > 22 else j['title']
+            c = j['company'][:12] + "..." if len(j['company']) > 15 else j['company']
+            s = f"{j.get('score', 0)}/10"
+            rows_a.append([str(idx), t, c, s])
+            
+        render_box_table(
+            "ALIGNED JOBS (RECOMMENDED: MATCH SCORE > 6)",
+            headers_a,
+            col_widths_a,
+            rows_a
+        )
+        
+    # 6. Interactive User Choice for Document Generation Scope
+    target_jobs = aligned_jobs
+    if non_aligned_jobs and aligned_jobs:
+        print("Choose document generation scope:")
+        print("  [1] Aligned Only (Recommended — Generate only for Score > 6 jobs)")
+        print("  [2] All Jobs (Generate for both Aligned and Non-Aligned jobs)")
+        try:
+            choice = input("\nEnter your choice [1 or 2, default is 1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = "1"
+        if choice == "2":
+            target_jobs = manual_jobs
+            print(f"\n[Scope Selected] Proceeding with ALL {len(target_jobs)} jobs.")
+        else:
+            target_jobs = aligned_jobs
+            print(f"\n[Scope Selected] Proceeding with {len(target_jobs)} Aligned jobs only.")
+    elif not aligned_jobs:
+        print("\n[Notice] No jobs met the alignment threshold (Score > 6).")
+        try:
+            choice = input("Do you still want to generate documents for all jobs? (y/N): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            choice = "n"
+        if choice in ("y", "yes"):
+            target_jobs = manual_jobs
+            print(f"\n[Scope Selected] Proceeding with {len(target_jobs)} jobs.")
+        else:
+            print("No documents generated. Exiting.")
+            return
+
+    # 7. Document Generation (PDF, Word, LaTeX)
+    from src.tailor_cv.generator import generate_tailored_documents
+    resumes_dir = os.path.join(outputs_dir, "generated_resumes")
+    os.makedirs(resumes_dir, exist_ok=True)
+    
+    generation_results = []
+    print(f"\nTailoring CV, Cover Letter & LaTeX Resume for {len(target_jobs)} target jobs...")
+    for idx, job in enumerate(target_jobs, start=1):
+        raw_title = job.get("title", "Unknown Title")
+        title = " ".join(str(raw_title).replace("\n", " ").replace("\r", " ").split())
+        raw_company = job.get("company", "Unknown Company")
+        company = " ".join(str(raw_company).replace("\n", " ").replace("\r", " ").split())
+        
+        job["sr_no"] = idx
+        print(f"\n[{idx}/{len(target_jobs)}] Generating Tailored Documents for '{title}' at '{company}'...")
+        ats_score = generate_tailored_documents(
+            cv_path=args.cv,
+            job=job,
+            model=args.openrouter_model,
+            output_base_dir=resumes_dir
+        )
+        
+        status_str = "Tailored" if ats_score else "Failed"
+        ats_str = str(ats_score) if ats_score else "N/A"
+        generation_results.append({
+            "no": idx,
+            "title": title,
+            "company": company,
+            "status": status_str,
+            "ats_score": ats_str
+        })
+        
+        if idx < len(target_jobs):
+            import time
+            time.sleep(3.0)
+            
+    headers = ["No", "Job Title", "Company", "Status", "ATS Score"]
+    col_widths = [2, 22, 15, 15, 9]
+    rows_res = []
+    for res in generation_results:
+        clean_title = " ".join(str(res['title']).replace("\n", " ").replace("\r", " ").split())
+        clean_comp = " ".join(str(res['company']).replace("\n", " ").replace("\r", " ").split())
+        t_title = clean_title[:19] + "..." if len(clean_title) > 22 else clean_title
+        t_company = clean_comp[:12] + "..." if len(clean_comp) > 15 else clean_comp
+        rows_res.append([str(res['no']), t_title, t_company, res['status'], res['ats_score']])
+        
+    render_box_table("MANUAL JOBS: GENERATED TAILORED CV, COVER LETTER & LATEX RESUME", headers, col_widths, rows_res)
 
 
 def main():
@@ -496,7 +805,12 @@ def main():
     except Exception as e:
         print(f"[Error] Failed to extract text from CV: {e}")
     
-    # 3. Check if we should only run CV matching on existing scraped_jobs.json
+    # 3. Check if we should run manual input mode directly
+    if args.manual:
+        run_manual_mode(args, outputs_dir)
+        return
+
+    # 4. Check if we should only run CV matching on existing scraped_jobs.json
     if args.match_only:
         print("=" * 60)
         print("Running CV Matching Mode Only")

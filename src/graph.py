@@ -1,5 +1,6 @@
 import operator
 import os
+import json
 from typing import Annotated, Dict, Any, List, TypedDict
 from langgraph.graph import StateGraph, START, END
 
@@ -10,6 +11,55 @@ from src.scrapers.glassdoor import GlassdoorScraper
 from src.verifier import JobVerifier
 from src.database import DatabaseHandler, LocalDatabaseHandler
 from src.tailor_cv.claude_client import ClaudeClient, accumulate_job_tokens, get_llm_client
+
+def check_job_exists(job: Job, output_path: str = None) -> bool:
+    """Checks if job is already saved in SQLite, MongoDB, or local JSON to save API tokens."""
+    dedup_key = job.dedup_key()
+    
+    # 1. Check local JSON output file if it exists
+    if output_path and os.path.exists(output_path):
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                jobs_data = json.load(f)
+                for j in jobs_data:
+                    j_title = str(j.get("title", "")).strip().lower()
+                    j_comp = str(j.get("company", "")).strip().lower()
+                    if j_title == (job.title or "").strip().lower() and j_comp == (job.company or "").strip().lower():
+                        return True
+                    if j.get("dedup_key") == dedup_key:
+                        return True
+        except Exception:
+            pass
+
+    # 2. Check local SQLite DB
+    sqlite_path = os.path.join(os.path.dirname(output_path or "data/scraped_jobs.json"), "scraped_jobs.db")
+    if os.path.exists(sqlite_path):
+        try:
+            import sqlite3
+            conn = sqlite3.connect(sqlite_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM jobs WHERE dedup_key = ? LIMIT 1", (dedup_key,))
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                return True
+        except Exception:
+            pass
+            
+    # 3. Check MongoDB if configured
+    if Config.MONGO_URI and Config.MONGO_URI.strip():
+        try:
+            from pymongo import MongoClient
+            client = MongoClient(Config.MONGO_URI, serverSelectionTimeoutMS=1500)
+            db = client[Config.DB_NAME]
+            if db[Config.COLLECTION_NAME].find_one({"dedup_key": dedup_key}):
+                client.close()
+                return True
+            client.close()
+        except Exception:
+            pass
+            
+    return False
 
 class ScraperState(TypedDict):
     role: str
@@ -65,6 +115,7 @@ def verify_jobs_node(state: ScraperState) -> Dict[str, Any]:
 def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
     cv_text = state.get("cv_text", "")
     verified_jobs = state.get("verified_jobs", [])
+    output_path = state.get("output_path")
     processed_jobs = []
     
     client = None
@@ -76,6 +127,11 @@ def score_jobs_node(state: ScraperState) -> Dict[str, Any]:
             print(f"[LangGraph Score Node Error] Failed to initialize LLM Client: {e}")
             
     for job in verified_jobs:
+        # Check if already in DB / JSON. If so, completely skip LLM API call to save tokens!
+        if check_job_exists(job, output_path):
+            print(f"  [Skipped Existing Job] '{job.title}' at {job.company} already exists in DB/JSON. Skipping to save API tokens.")
+            continue
+
         job_dict = job.to_dict()
         if client:
             print(f"  [Scoring API Call] '{job.title}' at {job.company}...")
